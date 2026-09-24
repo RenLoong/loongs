@@ -3,7 +3,11 @@
 
 declare(strict_types=1);
 
-$basePath = dirname(__DIR__);
+if (!defined('LOONGS_BASE_PATH')) {
+    define('LOONGS_BASE_PATH', __DIR__);
+}
+
+$basePath = LOONGS_BASE_PATH;
 
 $autoload = $basePath . '/vendor/autoload.php';
 if (!is_file($autoload)) {
@@ -33,7 +37,8 @@ foreach ($args as $arg) {
         continue;
     }
     fwrite(STDERR, "Unknown argument: {$arg}\n");
-    fwrite(STDERR, "Usage: bin/start [start|stop|reload|status] [--only=http,rpc,websocket,queue,crontab,custom-example]\n");
+    fwrite(STDERR, "Usage: php start [start|stop|reload|status] [--only=http,rpc,websocket,queue,crontab,custom-example]\n");
+    fwrite(STDERR, "   or: ./start [start|stop|reload|status] [...]\n");
     exit(1);
 }
 

@@ -1,0 +1,21 @@
+{
+    "name": "loongs/loongs",
+    "description": "loong-swoole HTTP server application",
+    "type": "project",
+    "license": "MIT",
+    "require": {
+        "php": "^8.4",
+        "loongs/cache": "dev-main",
+        "loongs/framework": "dev-main"
+    },
+    "autoload": {
+        "psr-4": {
+            "App\\": "apps/"
+        }
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true,
+    "config": {
+        "sort-packages": true
+    }
+}

@@ -1,0 +1,51 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+$basePath = dirname(__DIR__);
+
+$autoload = $basePath . '/vendor/autoload.php';
+if (!is_file($autoload)) {
+    fwrite(STDERR, "Autoloader not found. Run: composer update\n");
+    exit(1);
+}
+
+require $autoload;
+
+use Loongs\Process\ProcessManager;
+
+$args = array_slice($argv, 1);
+$command = 'start';
+$only = null;
+
+foreach ($args as $arg) {
+    if ($arg === '') {
+        continue;
+    }
+    if (str_starts_with($arg, '--only=')) {
+        $raw = substr($arg, 7);
+        $only = array_values(array_filter(array_map('trim', explode(',', $raw)), static fn (string $v): bool => $v !== ''));
+        continue;
+    }
+    if (in_array($arg, ['start', 'stop', 'reload', 'status'], true)) {
+        $command = $arg;
+        continue;
+    }
+    fwrite(STDERR, "Unknown argument: {$arg}\n");
+    fwrite(STDERR, "Usage: bin/start [start|stop|reload|status] [--only=http,rpc,websocket,queue,crontab,custom-example]\n");
+    exit(1);
+}
+
+$manager = new ProcessManager($basePath, $only);
+
+exit(match ($command) {
+    'stop' => $manager->stop(),
+    'reload' => $manager->reload(),
+    'status' => $manager->status(),
+    default => (static function () use ($manager): int {
+        $manager->start();
+
+        return 0;
+    })(),
+});

@@ -17,6 +17,18 @@ declare(strict_types=1);
  *   ./start rpc:set    user '{"transport":"remote","instances":[{"endpoint":"http://10.0.0.1:9502","weight":1}]}'
  *   ./start rpc:reset  user            (or --all) → back to the values below
  * Invalid changes are rejected and workers keep the previous map (logged as [rpc-hot]).
+ *
+ * Code API (same implementation as the CLI) — e.g. from an admin controller / crontab task:
+ *   use Loongs\Rpc\HotReload\RpcServiceManager;          // container-injectable, or rpc_services()
+ *   rpc_services()->switch('user', 'remote', 'http://10.0.0.12:9502');   // returns applied config
+ *   rpc_services()->switch('user', 'loopback');                          // → http://127.0.0.1:$RPC_PORT
+ *   rpc_services()->set('user', ['transport' => 'remote', 'instances' => [['endpoint' => 'http://10.0.0.1:9502', 'weight' => 3]]]);
+ *   rpc_services()->reset('user'); rpc_services()->resetAll();
+ *   rpc_services()->show('user');  // effective config + source (config|override) + this process's loaded map
+ *   rpc_services()->reload(); rpc_services()->version();
+ * Invalid input throws RpcException (400; unknown service 404) and leaves the override file untouched.
+ * Applied in the calling process immediately; other workers of the same server reload on their
+ * next RpcClient call (shared Swoole\Atomic); other roles/nodes and CLI writes: within interval_ms.
  */
 return [
     'path' => '/rpc',

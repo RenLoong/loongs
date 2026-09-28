@@ -8,11 +8,32 @@ declare(strict_types=1);
  * RPC discovery / retry settings for multi-instance deployments.
  * Instance weight drives WeightedInstancePicker (equal weights → stable order;
  * unequal → weighted shuffle). Backoff uses coroutine-friendly Sleeper.
+ *
+ * Hot switch (no restart): `services` is re-read by every worker when this file or the
+ * runtime override file changes (see `hot_reload`). Change targets with:
+ *   ./start rpc:show [service]
+ *   ./start rpc:switch user loopback http://127.0.0.1:9502
+ *   ./start rpc:switch user remote   http://10.0.0.12:9502
+ *   ./start rpc:set    user '{"transport":"remote","instances":[{"endpoint":"http://10.0.0.1:9502","weight":1}]}'
+ *   ./start rpc:reset  user            (or --all) → back to the values below
+ * Invalid changes are rejected and workers keep the previous map (logged as [rpc-hot]).
  */
 return [
     'path' => '/rpc',
     'default_timeout_ms' => 3000,
     'register_demo_handlers' => true,
+
+    // Optional instance marker: when set, responses carry meta.served_by {node, pid}.
+    'node' => (string) \Loongs\Support\Env::get('RPC_NODE', ''),
+
+    // Runtime hot switch of `services` (only services; retry/iouring/node need a restart).
+    'hot_reload' => [
+        'enabled' => filter_var(\Loongs\Support\Env::get('RPC_HOT_RELOAD', true), FILTER_VALIDATE_BOOLEAN),
+        // Per-worker Swoole timer; also throttles the call-path check in RpcClient.
+        'interval_ms' => (int) \Loongs\Support\Env::get('RPC_HOT_RELOAD_INTERVAL_MS', 1000),
+        // Written atomically by `start rpc:*` (gitignored under runtime/).
+        'override_file' => (string) \Loongs\Support\Env::get('RPC_HOT_RELOAD_FILE', 'runtime/rpc_services.json'),
+    ],
     'retry' => [
         'max_attempts' => 3,
         'timeout_ms' => 3000,

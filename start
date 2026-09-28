@@ -18,8 +18,14 @@ if (!is_file($autoload)) {
 require $autoload;
 
 use Loongs\Process\ProcessManager;
+use Loongs\Rpc\Console\RpcServiceCommand;
 
 $args = array_slice($argv, 1);
+
+// RPC hot switch: ./start rpc:show | rpc:switch | rpc:set | rpc:reset  (no restart needed)
+if (isset($args[0]) && RpcServiceCommand::handles($args[0])) {
+    exit((new RpcServiceCommand($basePath))->run(array_values($args)));
+}
 $command = 'start';
 $only = null;
 
@@ -39,6 +45,7 @@ foreach ($args as $arg) {
     fwrite(STDERR, "Unknown argument: {$arg}\n");
     fwrite(STDERR, "Usage: php start [start|stop|reload|status] [--only=http,rpc,websocket,queue,crontab,custom-example]\n");
     fwrite(STDERR, "   or: ./start [start|stop|reload|status] [...]\n");
+    fwrite(STDERR, "   or: ./start rpc:show|rpc:switch|rpc:set|rpc:reset ... (RPC hot switch)\n");
     exit(1);
 }
 

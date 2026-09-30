@@ -17,6 +17,7 @@ declare(strict_types=1);
  *   ./start rpc:set    user '{"transport":"remote","instances":[{"endpoint":"http://10.0.0.1:9502","weight":1}]}'
  *   ./start rpc:reset  user            (or --all) → back to the values below
  * Invalid changes are rejected and workers keep the previous map (logged as [rpc-hot]).
+ * CLI details: ./start help rpc:switch  (symfony/console; add --no-ansi for plain output).
  *
  * Code API (same implementation as the CLI) — e.g. from an admin controller / crontab task:
  *   use Loongs\Rpc\HotReload\RpcServiceManager;          // container-injectable, or rpc_services()

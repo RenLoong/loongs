@@ -3,13 +3,19 @@
 
 declare(strict_types=1);
 
+/**
+ * loongs console entry (symfony/console via Loongs\Console\Kernel).
+ *
+ *   ./start                         start (foreground; -d to daemonize)
+ *   ./start start|stop|restart|reload|status [--only=http,rpc]
+ *   ./start rpc:show|rpc:switch|rpc:set|rpc:reset ...   RPC hot switch (no restart)
+ *   ./start list | ./start help <command>
+ */
 if (!defined('LOONGS_BASE_PATH')) {
     define('LOONGS_BASE_PATH', __DIR__);
 }
 
-$basePath = LOONGS_BASE_PATH;
-
-$autoload = $basePath . '/vendor/autoload.php';
+$autoload = LOONGS_BASE_PATH . '/vendor/autoload.php';
 if (!is_file($autoload)) {
     fwrite(STDERR, "Autoloader not found. Run: composer update\n");
     exit(1);
@@ -17,47 +23,4 @@ if (!is_file($autoload)) {
 
 require $autoload;
 
-use Loongs\Process\ProcessManager;
-use Loongs\Rpc\Console\RpcServiceCommand;
-
-$args = array_slice($argv, 1);
-
-// RPC hot switch: ./start rpc:show | rpc:switch | rpc:set | rpc:reset  (no restart needed)
-if (isset($args[0]) && RpcServiceCommand::handles($args[0])) {
-    exit((new RpcServiceCommand($basePath))->run(array_values($args)));
-}
-$command = 'start';
-$only = null;
-
-foreach ($args as $arg) {
-    if ($arg === '') {
-        continue;
-    }
-    if (str_starts_with($arg, '--only=')) {
-        $raw = substr($arg, 7);
-        $only = array_values(array_filter(array_map('trim', explode(',', $raw)), static fn (string $v): bool => $v !== ''));
-        continue;
-    }
-    if (in_array($arg, ['start', 'stop', 'reload', 'status'], true)) {
-        $command = $arg;
-        continue;
-    }
-    fwrite(STDERR, "Unknown argument: {$arg}\n");
-    fwrite(STDERR, "Usage: php start [start|stop|reload|status] [--only=http,rpc,websocket,queue,crontab,custom-example]\n");
-    fwrite(STDERR, "   or: ./start [start|stop|reload|status] [...]\n");
-    fwrite(STDERR, "   or: ./start rpc:show|rpc:switch|rpc:set|rpc:reset ... (RPC hot switch)\n");
-    exit(1);
-}
-
-$manager = new ProcessManager($basePath, $only);
-
-exit(match ($command) {
-    'stop' => $manager->stop(),
-    'reload' => $manager->reload(),
-    'status' => $manager->status(),
-    default => (static function () use ($manager): int {
-        $manager->start();
-
-        return 0;
-    })(),
-});
+exit((new Loongs\Console\Kernel(LOONGS_BASE_PATH))->run());

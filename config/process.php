@@ -11,7 +11,7 @@ return [
     // APP_NAME ([A-Za-z0-9_]+, default loongs) is validated by ProcessManager and shown in every
     // process title: loong-swoole[<APP_NAME>]: master / http / rpc / watchdog http#0 …
     'name' => (string) env('APP_NAME', 'loongs'),
-    // Empty → runtime/<APP_NAME>.pid / runtime/<APP_NAME>.log (lock: runtime/<APP_NAME>.lock).
+    // Empty → runtime/loongs.pid / runtime/loongs.log (lock: runtime/loongs.lock), independent of APP_NAME.
     'pid_file' => (string) env('PROCESS_PID_FILE', ''),
     'log_file' => (string) env('PROCESS_LOG_FILE', ''),
     'daemonize' => filter_var(env('PROCESS_DAEMONIZE', false), FILTER_VALIDATE_BOOLEAN),

@@ -28,7 +28,7 @@
 | `start` | 启动进程管理器（http / rpc / websocket / queue / crontab / custom） |
 | `stop` | 停止运行中的 master（SIGTERM，30 秒后 SIGKILL）；master 已不在时清理残留孤儿进程 |
 | `restart` | 先 stop（如在运行）再 start |
-| `reload` | 平滑重载：向 master 发 SIGUSR1，子进程重载 worker |
+| `reload` | 平滑重载：master 按角色重载子进程并加载新代码，在途请求处理完，不产生崩溃式退出（见 3.4） |
 | `status` | 显示 master 状态与进程表（未运行 / 孤儿残留时退出码 1） |
 | `rpc:show` | 显示生效的 rpc.services（来源 config / override）及覆盖文件状态 |
 | `rpc:switch` | 热切换某个 service 的 transport：local / loopback / remote（无需重启） |
@@ -79,6 +79,7 @@ start [options]
 
 退出码：正常退出 `0`；以下情况报错并返回 `1`（均不会派生任何子进程）：
 - 已在运行（含正在平滑停止中）：`Already running (pid N). Use stop/reload/status.`
+- 其他项目有同名（相同 `APP_NAME`）服务在运行：`Another service with APP_NAME "…" is already running from a different project: pid N … (project …)`，不创建任何文件（见 [3.7](#37-app_name-与同机多服务)）。
 - 另一个 `start` 正在启动：`Another start is in progress (pid N).`
 - 上次的 master 已死但子进程仍存活：`The master is gone but N process(es) of the previous run are still alive (...). Run ./loongs stop to clean them up.`
 - 配置端口已被占用：`Port 127.0.0.1:19501 for [http] is already in use by pid N <cmdline> (Address already in use). Free the port or change it in .env / config/process.php.`
@@ -205,12 +206,48 @@ restart [options]
 reload
 ```
 
-向 master 发 SIGUSR1，子进程重载各自的 worker。是否在运行与 `stop`/`status` 同样按实例锁判断，不会向复用了 pid 的无关进程发信号。
+向 master 发 SIGUSR1，master 按角色逐个平滑重载子进程并加载新代码（`apps/`、`routes`、RPC 服务类等在 worker 内加载的文件）；在途请求会处理完，重载期间新请求照常被服务，日志中不会出现崩溃式退出（`signal=10`、`restarting in …`）。是否在运行与 `stop`/`status` 同样按实例锁判断，不会向复用了 pid 的无关进程发信号。
+
+| 角色 | 方式 |
+| --- | --- |
+| `http` / `websocket` / epoll 模式 `rpc` | 对该子进程发 SIGUSR1 → Swoole 平滑重启所有 worker（监听 socket 不关闭；旧 worker 处理完在途请求才退出；每个 worker 在 WorkerStart 中新建 Application，所以会加载新代码） |
+| io_uring 模式 `rpc` | 先起替换进程，等它监听到端口（SO_REUSEPORT）后，再对旧进程发 SIGTERM；旧进程停止接收、排空在途请求（最多 10 秒）后以 0 退出，日志记 `replaced by reload`。不调用 `shutdown()`（避开 uring fd 0 问题） |
+| `queue` / `crontab` / `custom` / app 进程 | SIGTERM（各自的平滑停止：当前任务做完），退出后 master 立即重建，日志为 INFO `reload, stopped in … → respawning`，不计入崩溃重启 |
+
+子进程本身忽略直接收到的 SIGUSR1（只有 master 转发的才生效），误发 `kill -USR1 <子进程>` 不会杀死它。
+
+**Swoole Server 模式**：HTTP 等 `Swoole\Server` 默认按 worker 数选择：`worker_num > 1` 为 `SWOOLE_BASE`，`worker_num ≤ 1` 以及 websocket 为 `SWOOLE_PROCESS`（BASE 单 worker 下无法重载 worker）。可在 `config/process.php` 对应进程里用 `'mode' => 'process'|'base'` 覆盖。
+
+**reload 不生效、需要 `restart` 的**：`.env`、`config/process.php`（进程表、端口、worker 数）、master 本身的代码、框架引导阶段在 fork 前已加载的类。
 
 退出码：已发送为 `0`；未运行（`Not running.`）为 `1`。
 
 ```bash
 ./loongs reload
+```
+
+实测（http×2 worker、uring rpc、websocket、queue、crontab、custom-example、user.stats；reload 前改代码 CODE_V1 → CODE_V2，并发起 4 秒的慢 RPC、3 秒的慢 HTTP，reload 后持续压 6 秒）：
+
+```text
+$ ./loongs reload --no-ansi
+ [OK] Reload signal (SIGUSR1) sent to master pid 467483.
+  http / websocket: Swoole worker reload · rpc (uring): replacement, then the old one drains · queue / crontab / custom: graceful respawn. Progress: the master log (reload: …).
+requests during the 6s after reload: http ok=114 fail=0 · rpc ok=114 fail=0
+slow RPC  (4s, started before reload): 200 4.000534s {"code":0,"message":"ok","data":{"slept":4,"pid":467486,"ver":"CODE_V1"},"id":"s"}
+slow HTTP (3s, started before reload): 200 3.000597s {"code":0,"message":"ok","data":{"slept":3,"pid":467495,"ver":"CODE_V1"}}
+after reload: http → "ver":"CODE_V2"   rpc → "ver":"CODE_V2"
+
+INFO [master] reload: 7 children
+INFO [master] reload: http#0 pid=467484 → SIGUSR1 (Swoole worker reload; listener stays open)
+INFO [master] reload: rpc#0 new pid=467582 listening on :19502 after 28ms → SIGTERM old pid=467486 (drains in-flight requests, then exits)
+INFO [rpc#0]  RPC stopping (SIGTERM): draining 1 in-flight request(s), max 10s
+INFO [master] reload: queue#0 pid=467490 → SIGTERM, respawned when it exits
+INFO [master] reload: done in 31ms
+INFO [master] child exit crontab#0 pid=467494 code=0 signal=0 uptime=2.04s — reload, stopped in 301ms → respawning
+INFO [master] child exit queue#0 pid=467490 code=0 signal=0 uptime=2.14s — reload, stopped in 404ms → respawning
+INFO [rpc#0]  RPC stopped (SIGTERM) in-flight=1 drained in 3.43s
+INFO [master] child exit rpc#0 pid=467486 code=0 signal=0 uptime=5.25s — replaced by reload, drained in 3.51s
+signal=10 lines: 0 · 'restarting in' (crash-style) lines: 0
 ```
 
 ### 3.5 `status` — 状态
@@ -271,7 +308,7 @@ Loongs status
 
 ### 3.6 实例锁、孤儿进程与强制退出
 
-**实例锁**：pid 文件旁有锁文件 `<pid 文件去掉 .pid>.lock`（默认 `runtime/<APP_NAME>.lock`；`.env` 设了 `PROCESS_PID_FILE=runtime/loong-swoole.pid` 时为 `runtime/loong-swoole.lock`；永不删除）。`start` 在任何 fork / daemonize **之前**以 `flock(LOCK_EX|LOCK_NB)` 取锁（最多重试 1 秒），取到后立刻写 pid 文件，daemonize 后再以 daemon 的 pid 覆盖。锁的打开文件描述会被所有子进程继承，因此只要本实例还有任何进程活着，锁就一直被持有：
+**实例锁**：pid 文件旁有锁文件 `<pid 文件去掉 .pid>.lock`（默认 `runtime/loongs.lock`；`.env` 设了 `PROCESS_PID_FILE=runtime/loong-swoole.pid` 时为 `runtime/loong-swoole.lock`；永不删除）。`start` 在任何 fork / daemonize **之前**以 `flock(LOCK_EX|LOCK_NB)` 取锁（最多重试 1 秒），取到后立刻写 pid 文件，daemonize 后再以 daemon 的 pid 覆盖。锁的打开文件描述会被所有子进程继承，因此只要本实例还有任何进程活着，锁就一直被持有：
 
 - 同时执行多个 `start`（实测 10 个并发）只有一个成功，其余报 `Already running (pid N)`（或 `Another start is in progress`），退出码 1。
 - 平滑停止期间（RPC 在排空请求）再 `start` 会被拒绝：`Already running (pid N)`。
@@ -337,7 +374,7 @@ $ ./loongs start --only=http,rpc --no-ansi
 
 ### 3.7 APP_NAME 与同机多服务
 
-`APP_NAME`（`.env`）是服务名，出现在所有进程标题和默认的 pid / 日志 / 锁文件名中，用来区分同一台机器上的多个服务。
+`APP_NAME`（`.env`）是服务名，出现在所有进程标题中，用来区分同一台机器上的多个服务；同一台机器上必须唯一（见下文“同名保护”）。
 
 **规则**：只允许字母、数字、下划线：`^[A-Za-z0-9_]+$`。空值或未设置时为 `loongs`。`start` / `restart` / `stop` / `reload` / `status` 在任何 fork 之前校验，不合法则打印错误并退出码 1（不会创建 pid / 锁 / 日志文件）；`rpc:*`、`list`、`help` 不依赖它，不做校验。
 
@@ -365,21 +402,60 @@ loong-swoole[alpha]: watchdog http#0     # 看门狗
 
 `ps -eo pid,args | grep '[l]oong-swoole\[alpha\]:'` 只列出 alpha 服务的进程。/proc 兜底找 master、孤儿检测、锁持有者、`status` / `stop` 都按本服务的前缀 `loong-swoole[<APP_NAME>]:` 匹配（外加锁路径），APP_NAME 不同的实例互不识别。端口被别的 loongs 服务占用时，端口预检会提示 `It belongs to another loongs service (other APP_NAME)`。
 
-**默认文件名**：`PROCESS_PID_FILE` / `PROCESS_LOG_FILE` 留空时为 `runtime/<APP_NAME>.pid` / `runtime/<APP_NAME>.log`，锁文件为 `runtime/<APP_NAME>.lock`。显式设置的值照常生效（例如本仓库 `.env` 里的 `PROCESS_PID_FILE=runtime/loong-swoole.pid`）。
+**默认文件名**：`PROCESS_PID_FILE` / `PROCESS_LOG_FILE` 留空时固定为框架名 `runtime/loongs.pid` / `runtime/loongs.log`，锁文件为 `runtime/loongs.lock`，与 `APP_NAME` 无关（改 APP_NAME 不会改文件名）。每个项目目录有自己的 `runtime/`，因此不同项目互不冲突；同一目录跑两个服务需显式设置不同的 `PROCESS_PID_FILE`。显式设置的值照常生效（例如本仓库 `.env` 里的 `PROCESS_PID_FILE=runtime/loong-swoole.pid`）。
 
-**同机多服务**：每个服务使用不同的 `APP_NAME` + 端口 + pid 文件（通常各自一个 `server/` 目录，默认 pid 文件已按 APP_NAME 区分）。实测 alpha（19501/19502）与 beta（19503，另一个 base 目录）同时运行：
+**同机多服务**：每个服务使用不同的 `APP_NAME` + 端口（通常各自一个项目目录，默认文件都在各自的 `runtime/loongs.*`）。实测 alpha（19501/19502，`server/`）与 beta（19503，`/tmp/loongs-beta`）同时运行：
 
 ```text
-     453095  453032 loong-swoole[alpha]: master
-     453096  453095 loong-swoole[alpha]: http
-     453097  453095 loong-swoole[alpha]: rpc
-     453113  453032 loong-swoole[beta]: master
-     453114  453113 loong-swoole[beta]: http
-alpha$ ./loongs status      →  app: alpha … master: running  pid=453095 … pid file: …/server/runtime/alpha.pid
-beta $ ./loongs status      →  app: beta  … master: running  pid=453113 … pid file: /tmp/loongs-beta/runtime/beta.pid
-alpha$ ./loongs stop        →  [OK] Stopped (pid 453095, 1.21s).   beta 的 5 个进程全部仍在
-kill -9 <alpha master>      →  alpha 的 7 个进程 1.1s 内全部退出；beta 不受影响
+     467135  466304 loong-swoole[alpha]: master
+     467136  467135 loong-swoole[alpha]: http
+     467137  467135 loong-swoole[alpha]: rpc
+     467168  466304 loong-swoole[beta]: master
+     467169  467168 loong-swoole[beta]: http
+alpha$ ./loongs status      →  app: alpha … master: running  pid=467135 … pid file: …/server/runtime/loongs.pid
+beta $ ./loongs status      →  app: beta  … master: running  pid=467168 … pid file: /tmp/loongs-beta/runtime/loongs.pid
+alpha$ ./loongs start -d    →  [ERROR] Already running (pid 467135). Use stop/reload/status.
+alpha$ ./loongs stop        →  [OK] Stopped (pid 467135, 1.01s).   beta 的 7 个进程全部仍在
+kill -9 <alpha master>      →  alpha 的 9 个进程约 1.0s 内全部退出；beta 不受影响
 ```
+
+**同名保护**：同一台机器上 `APP_NAME` 必须唯一。`start` / `restart` 在任何 fork、取锁、写文件之前扫描 `/proc`，找标题为 `loong-swoole[<APP_NAME>]: …` 的进程（master 或残留子进程）；若它不属于本项目实例（打开的锁文件路径 / 工作目录与本项目不同），拒绝启动、退出码 1、不创建任何文件，已在运行的那个服务不受影响。本项目自己已在运行时仍是原来的 `Already running (pid N)`。实测（`server` 与 `/tmp/loongs-beta` 都设 `APP_NAME=same`，端口不同）：
+
+```text
+beta$ ./loongs start -d --no-ansi          # start / restart -d 同样
+ [ERROR] Another service with APP_NAME "same" is already running from a
+         different project: pid 466373 loong-swoole[same]: master (project
+         /www/wwwroot/loong-swoole/server, lock
+         /www/wwwroot/loong-swoole/server/runtime/loongs.lock). APP_NAME must be
+         unique on this host: change APP_NAME in /tmp/loongs-beta/.env, or stop
+         that service first (cd /www/wwwroot/loong-swoole/server && ./loongs
+         stop).
+$ echo $?
+1
+beta$ ls runtime/                          # 空，未创建 pid / 锁 / 日志
+beta$ ./loongs status --no-ansi
+  app: same  (process titles loong-swoole[same]: …)
+  master: stopped
+  conflict: another service with APP_NAME "same" runs from /www/wwwroot/loong-swoole/server (pid 466373 loong-swoole[same]: master) — APP_NAME must be unique on this host; start is refused until it stops or APP_NAME changes
+server$ ./loongs start -d --no-ansi        # 同一项目再次启动
+ [ERROR] Already running (pid 466373). Use stop/reload/status.
+```
+
+beta 改为 `APP_NAME=other` 后两者可同时运行，各自 `stop` 正常。
+
+同一项目目录里用另一个 `PROCESS_PID_FILE` 再起一个同名实例也会被拒绝（同样 exit 1、不建文件）：
+
+```text
+server$ ./loongs start -d --no-ansi        # .env: PROCESS_PID_FILE=runtime/sn2.pid, HTTP_PORT=19503
+ [ERROR] Another instance with APP_NAME "same" is already running from this
+         project with a different pid file: pid 475266 loong-swoole[same]:
+         master (project /www/wwwroot/loong-swoole/server, lock
+         /www/wwwroot/loong-swoole/server/runtime/loongs.lock). APP_NAME must be
+         unique on this host: give this instance its own APP_NAME in .env, or
+         stop that instance first (kill -TERM 475266, or ./loongs stop with its
+         PROCESS_PID_FILE).
+```
+
 
 **升级提示**：旧版本的进程标题是 `loong-swoole: …`（不带 APP_NAME）。升级前请先用旧代码 `./loongs stop` 停掉正在运行的实例；新代码仍能通过 pid 文件 + 锁找到旧 master，但基于标题的孤儿识别不认旧标题。
 
@@ -559,9 +635,9 @@ return [
 
 | 键 | 作用 |
 |---|---|
-| `APP_NAME` | 服务名：只允许字母、数字、下划线（`^[A-Za-z0-9_]+$`），空或未设 = `loongs`；出现在进程标题 `loong-swoole[<APP_NAME>]: …` 与默认 pid/log/锁文件名中；start/stop/restart/reload/status 启动前校验，非法则 exit 1 |
-| `PROCESS_PID_FILE` | master pid 文件（留空默认 `runtime/<APP_NAME>.pid`；锁文件 = 去掉 `.pid` 加 `.lock`） |
-| `PROCESS_LOG_FILE` | daemon 模式下 master + 子进程 stdout/stderr 的去向（留空默认 `runtime/<APP_NAME>.log`，追加写，纯文本）；前台模式输出到终端 |
+| `APP_NAME` | 服务名：只允许字母、数字、下划线（`^[A-Za-z0-9_]+$`），空或未设 = `loongs`；出现在进程标题 `loong-swoole[<APP_NAME>]: …`；同机唯一（start/restart 发现其他项目的同名服务则拒绝，exit 1）；start/stop/restart/reload/status 启动前校验，非法则 exit 1 |
+| `PROCESS_PID_FILE` | master pid 文件（留空默认 `runtime/loongs.pid`，与 APP_NAME 无关；锁文件 = 去掉 `.pid` 加 `.lock`） |
+| `PROCESS_LOG_FILE` | daemon 模式下 master + 子进程 stdout/stderr 的去向（留空默认 `runtime/loongs.log`，追加写，纯文本）；前台模式输出到终端 |
 | `PROCESS_DAEMONIZE` | 是否后台运行（`start -d` 可覆盖） |
 | `HTTP_ENABLED` / `HTTP_HOST` / `HTTP_PORT` / `HTTP_WORKER_NUM` | HTTP 进程（默认端口 9501） |
 | `RPC_ENABLED` / `RPC_HOST` / `RPC_PORT` / `RPC_WORKER_NUM` | RPC 进程（默认端口 9502，loopback 缺省 endpoint 也用 `RPC_PORT`） |
@@ -587,7 +663,7 @@ return [
 
 ## 8. Composer 命令
 
-**部署 / 使用者**：依赖来自 Packagist（`loongs/framework`、`loongs/cache`、`symfony/console` 等）。
+**部署 / 使用者**：依赖来自 Packagist（`loongs/framework`、`loongs/cache`、`loongs/helper`、`symfony/console` 等，`loongs/*` 约束 `dev-main`）。
 
 ```bash
 cd server
@@ -596,7 +672,7 @@ composer install
 composer config -g repos.packagist composer https://mirrors.cloud.tencent.com/composer/
 ```
 
-**本地框架开发**：`composer.dev.json` 只在本地使用（不入库），以 path 仓库软链到 `../composer/framework`、`../composer/cache`、`../composer/helper`（`loongs/helper`，尚未发布到 Packagist，所以只在 `composer.dev.json` 里引用）。
+**本地框架开发**：`composer.dev.json` 只在本地使用（不入库），以 path 仓库软链到 `../composer/framework`、`../composer/cache`、`../composer/helper`（`loongs/helper` 也已在 Packagist，`composer.json` 与 `composer.dev.json` 都 require 它）。
 
 ```bash
 cd server

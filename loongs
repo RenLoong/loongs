@@ -6,10 +6,10 @@ declare(strict_types=1);
 /**
  * loongs console entry (symfony/console via Loongs\Console\Kernel).
  *
- *   ./start                         start (foreground; -d to daemonize)
- *   ./start start|stop|restart|reload|status [--only=http,rpc]
- *   ./start rpc:show|rpc:switch|rpc:set|rpc:reset ...   RPC hot switch (no restart)
- *   ./start list | ./start help <command>
+ *   ./loongs                         start (foreground; -d to daemonize)
+ *   ./loongs start|stop|restart|reload|status [--only=http,rpc]
+ *   ./loongs rpc:show|rpc:switch|rpc:set|rpc:reset ...   RPC hot switch (no restart)
+ *   ./loongs list | ./loongs help <command>
  */
 if (!defined('LOONGS_BASE_PATH')) {
     define('LOONGS_BASE_PATH', __DIR__);

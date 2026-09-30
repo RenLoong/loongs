@@ -1,9 +1,9 @@
 # loongs 命令速查（server/）
 
-本文件列出 `server/` 下所有可执行命令及用法，内容取自 `./start list --no-ansi` / `./start help <命令> --no-ansi` 的真实输出。
+本文件列出 `server/` 下所有可执行命令及用法，内容取自 `./loongs list --no-ansi` / `./loongs help <命令> --no-ansi` 的真实输出。
 命令行基于 **symfony/console**（`Loongs\Console\Kernel`），业务逻辑在 `Loongs\Process\ProcessManager` / `Loongs\Rpc\HotReload\RpcServiceManager`。
 
-> 查看最新帮助：`./start list`、`./start help <命令>`（加 `--no-ansi` 得到纯文本）。
+> 查看最新帮助：`./loongs list`、`./loongs help <命令>`（加 `--no-ansi` 得到纯文本）。
 
 ---
 
@@ -12,14 +12,14 @@
 在 `server/` 目录下：
 
 ```bash
-./start <命令> [参数] [选项]
+./loongs <命令> [参数] [选项]
 # 宝塔等面板的 PHP 常禁用 pcntl_* 等函数，推荐显式放开：
-/www/server/php/84/bin/php -d disable_functions= start <命令> [参数] [选项]
+/www/server/php/84/bin/php -d disable_functions= loongs <命令> [参数] [选项]
 ```
 
-- `server/start` 是入口脚本：定义 `LOONGS_BASE_PATH = __DIR__`，加载 `vendor/autoload.php`，运行控制台。缺少 vendor 时提示 `Autoloader not found. Run: composer update` 并退出 1。
-- 不带命令时默认执行 `start`：`./start` 等价于 `./start start`，`./start --only=http,rpc` 同样有效。
-- 可在任意目录用绝对路径执行（如 `/www/wwwroot/loong-swoole/server/start status`），基准目录固定为 `start` 所在目录。
+- `server/loongs` 是入口脚本（原名 `server/start`，已更名；命令名 `start` 不变）：定义 `LOONGS_BASE_PATH = __DIR__`，加载 `vendor/autoload.php`，运行控制台。缺少 vendor 时提示 `Autoloader not found. Run: composer update` 并退出 1。
+- 不带命令时默认执行 `start`：`./loongs` 等价于 `./loongs start`，`./loongs --only=http,rpc` 同样有效。
+- 可在任意目录用绝对路径执行（如 `/www/wwwroot/loong-swoole/server/loongs status`），基准目录固定为 `loongs` 所在目录。
 
 ## 1. 命令总览
 
@@ -80,21 +80,21 @@ start [options]
 退出码：正常退出 `0`；以下情况报错并返回 `1`（均不会派生任何子进程）：
 - 已在运行（含正在平滑停止中）：`Already running (pid N). Use stop/reload/status.`
 - 另一个 `start` 正在启动：`Another start is in progress (pid N).`
-- 上次的 master 已死但子进程仍存活：`The master is gone but N process(es) of the previous run are still alive (...). Run ./start stop to clean them up.`
+- 上次的 master 已死但子进程仍存活：`The master is gone but N process(es) of the previous run are still alive (...). Run ./loongs stop to clean them up.`
 - 配置端口已被占用：`Port 127.0.0.1:19501 for [http] is already in use by pid N <cmdline> (Address already in use). Free the port or change it in .env / config/process.php.`
 - 没有可启动的进程。
 - 被第二次 Ctrl+C / SIGTERM 强制退出（前台）。
 
 ```bash
-./start                              # 同 ./start start
-./start start --only=http,rpc
-./start start --only='user.*' -d
+./loongs                              # 同 ./loongs start
+./loongs start --only=http,rpc
+./loongs start --only='user.*' -d
 ```
 
 前台启动 + Ctrl+C 的真实输出（`--no-ansi`；测试端口 19501/19502、`HTTP_WORKER_NUM=2`，pid/log 文件为测试用的 `*-demo.*`）：
 
 ```text
-$ ./start start --only=http,rpc --no-ansi
+$ ./loongs start --only=http,rpc --no-ansi
  Loongs dev-main@4a2d8cd  ·  loongs
 
   Framework  Loongs dev-main@4a2d8cd (loongs/framework)
@@ -104,7 +104,7 @@ $ ./start start --only=http,rpc --no-ansi
   Base path  /www/wwwroot/loong-swoole/server
   Pid file   runtime/loong-swoole-demo.pid
   Log        stdout (runtime/loong-swoole-demo.log in daemon mode)
-  Mode       foreground (Ctrl+C or ./start stop)
+  Mode       foreground (Ctrl+C or ./loongs stop)
 
 [2026-09-30 11:36:04] INFO  [master] spawned http#0 type=http pid=423651
 [2026-09-30 11:36:04] INFO  [master] spawned rpc#0 type=rpc pid=423652
@@ -129,7 +129,7 @@ $ ./start start --only=http,rpc --no-ansi
 `-d` 后台启动：终端只打印横幅和计划表（pid 未知，state=starting），之后 master 与所有子进程的 stdout/stderr（运行日志、PHP 警告、Swoole 日志）都写入 `process.log_file`（纯文本）：
 
 ```text
-$ ./start start --only=http,rpc -d
+$ ./loongs start --only=http,rpc -d
 
  Loongs dev-main@4a2d8cd  ·  loongs
 
@@ -149,7 +149,7 @@ $ ./start start --only=http,rpc -d
   rpc       rpc    -     127.0.0.1:19502   1         -     starting   uring_socket
  --------- ------ ----- ----------------- --------- ----- ---------- --------------
 
- Running in the background. Logs: runtime/loong-swoole-demo.log · ./start status · ./start stop
+ Running in the background. Logs: runtime/loong-swoole-demo.log · ./loongs status · ./loongs stop
 ```
 
 ### 3.2 `stop` — 停止
@@ -169,7 +169,7 @@ stop
 孤儿清理的真实输出（master 与看门狗被 kill -9、rpc 子进程被 SIGSTOP 以模拟"不响应 SIGTERM"）：
 
 ```text
-$ ./start stop --no-ansi
+$ ./loongs stop --no-ansi
  [WARNING] Master is gone; stopping 2 orphaned process tree(s) (4 processes)
            with SIGTERM: pid 429268 loong-swoole: http, pid 429270 loong-swoole:
            rpc
@@ -179,7 +179,7 @@ $ echo $?
 ```
 
 ```bash
-./start stop
+./loongs stop
 ```
 
 ### 3.3 `restart` — 重启
@@ -195,8 +195,8 @@ restart [options]
 退出码：stop 失败则返回 stop 的退出码，否则返回 start 的退出码。
 
 ```bash
-./start restart -d
-./start restart --only=http,rpc
+./loongs restart -d
+./loongs restart --only=http,rpc
 ```
 
 ### 3.4 `reload` — 平滑重载
@@ -210,12 +210,12 @@ reload
 退出码：已发送为 `0`；未运行（`Not running.`）为 `1`。
 
 ```bash
-./start reload
+./loongs reload
 ```
 
 ### 3.5 `status` — 状态
 
-显示 master 状态、pid 文件，以及合并后（全局 + 各 app）的进程表。表列为 process / type / app / listen / count / pid / state，state 取值为 running、stopped、not running、orphaned、disabled。master 状态按实例锁判断（pid 文件 + 锁被持有 + 该 pid 是锁持有者）；陈旧 pid 文件只在确认无人持锁时才删除。master 已不在但仍有本实例进程时显示 `orphaned` 及 `→ run ./start stop to clean them up`。只读操作，不影响运行中的服务。
+显示 master 状态、pid 文件，以及合并后（全局 + 各 app）的进程表。表列为 process / type / app / listen / count / pid / state，state 取值为 running、stopped、not running、orphaned、disabled。master 状态按实例锁判断（pid 文件 + 锁被持有 + 该 pid 是锁持有者）；陈旧 pid 文件只在确认无人持锁时才删除。master 已不在但仍有本实例进程时显示 `orphaned` 及 `→ run ./loongs stop to clean them up`。只读操作，不影响运行中的服务。
 
 ```
 status [options]
@@ -228,9 +228,9 @@ status [options]
 退出码：运行中 `0`；未运行或孤儿残留 `1`。
 
 ```bash
-./start status
-./start status -v          # 额外显示 log file / daemonize
-./start status --no-ansi   # 纯文本（脚本解析用）
+./loongs status
+./loongs status -v          # 额外显示 log file / daemonize
+./loongs status --no-ansi   # 纯文本（脚本解析用）
 ```
 
 未运行时的真实输出示例（`--no-ansi`）：
@@ -263,7 +263,7 @@ Loongs status
 ```text
   master: stopped
   orphaned: the master is gone but 2 process(es) are still alive: pid 429268 loong-swoole: http, pid 429270 loong-swoole: rpc
-  → run ./start stop to clean them up
+  → run ./loongs stop to clean them up
   ...
   http              http        -         127.0.0.1:19501   1 × 2w   429268   orphaned
   rpc               rpc         -         127.0.0.1:19502   1 × 1w   429270   orphaned
@@ -279,7 +279,7 @@ Loongs status
 
 **端口预检**：取锁后、fork 之前逐个 bind 配置端口（**不**设 SO_REUSEPORT，因此即使对方用 SO_REUSEPORT 监听、而 RPC 本身使用 reuse_port 也能发现冲突），被占用时从 `/proc/net/tcp*` 找出占用者 pid 与命令行并拒绝启动（退出码 1，pid 文件被清除、锁被释放）。
 
-**master 意外死亡（kill -9、终端关闭）**：每个子进程在启动角色前 fork 一个看门狗（进程名 `loong-swoole: watchdog <tag>`），每 200ms 检查 master 是否仍在；master 消失后看门狗对子进程发 SIGTERM（平滑退出），15 秒后仍未退出则 SIGKILL 其整棵进程树。实测 kill -9 master 后 0.38s 内所有进程退出，端口释放，下次 `start` 正常。若仍有残留（看门狗也被杀、子进程卡死），`status` 显示 `orphaned`，`start` 拒绝并提示运行 `./start stop`，`stop` 负责清理（见 3.2）。
+**master 意外死亡（kill -9、终端关闭）**：每个子进程在启动角色前 fork 一个看门狗（进程名 `loong-swoole: watchdog <tag>`），每 200ms 检查 master 是否仍在；master 消失后看门狗对子进程发 SIGTERM（平滑退出），15 秒后仍未退出则 SIGKILL 其整棵进程树。实测 kill -9 master 后 0.38s 内所有进程退出，端口释放，下次 `start` 正常。若仍有残留（看门狗也被杀、子进程卡死），`status` 显示 `orphaned`，`start` 拒绝并提示运行 `./loongs stop`，`stop` 负责清理（见 3.2）。
 
 **强制退出**：平滑停止期间第二次收到 SIGINT / SIGTERM（前台再按一次 Ctrl+C，或 daemon 再 `kill -TERM`），master 立刻 SIGKILL 剩余子进程（含看门狗），删除 pid 文件、释放锁并记录：
 
@@ -300,8 +300,8 @@ Loongs status
 |---|---|---|
 | RPC 排空在途请求 | `min(max_wait_time, 10)` 秒 | 直接退出事件循环 |
 | master 等待子进程退出（`STOP_GRACE`） | 15 秒 | SIGKILL 子进程树 |
-| `./start stop` 等待 master + 锁释放 | 30 秒 | SIGKILL master 及所有锁持有者 |
-| `./start stop` 清理孤儿 | 10 秒 | SIGKILL |
+| `./loongs stop` 等待 master + 锁释放 | 30 秒 | SIGKILL master 及所有锁持有者 |
+| `./loongs stop` 清理孤儿 | 10 秒 | SIGKILL |
 | 看门狗：master 消失后等待子进程（`ORPHAN_GRACE`） | 15 秒 | SIGKILL 子进程树 |
 | 第二次 Ctrl+C / SIGTERM | 立即 | SIGKILL 全部，退出码 1 |
 
@@ -328,8 +328,8 @@ rpc:show [<service>]
 退出码：正常 `0`；覆盖文件或生效配置无效时 `1`（此时 worker 继续使用旧配置）；指定的 service 不存在时 `1`。
 
 ```bash
-./start rpc:show
-./start rpc:show user
+./loongs rpc:show
+./loongs rpc:show user
 ```
 
 ### 4.2 `rpc:switch` — 切换 transport
@@ -349,9 +349,9 @@ rpc:switch <service> <transport> [<endpoint>]
 退出码：成功 `0`；未知 transport、remote 缺 endpoint、非法 URL、未定义的 service 均为 `1`。
 
 ```bash
-./start rpc:switch user loopback
-./start rpc:switch user remote http://10.0.0.12:9502
-./start rpc:switch user local
+./loongs rpc:switch user loopback
+./loongs rpc:switch user remote http://10.0.0.12:9502
+./loongs rpc:switch user local
 ```
 
 ### 4.3 `rpc:set` — 整体设置
@@ -368,7 +368,7 @@ rpc:set <service> <json>
 退出码：成功 `0`；JSON 非法、非对象、校验失败（如负权重、非法 endpoint）为 `1`。
 
 ```bash
-./start rpc:set user '{"transport":"remote","instances":[{"endpoint":"http://10.0.0.1:9502","weight":1},{"endpoint":"http://10.0.0.2:9502","weight":3}]}'
+./loongs rpc:set user '{"transport":"remote","instances":[{"endpoint":"http://10.0.0.1:9502","weight":1},{"endpoint":"http://10.0.0.2:9502","weight":3}]}'
 ```
 
 ### 4.4 `rpc:reset` — 恢复
@@ -385,8 +385,8 @@ rpc:reset [options] [--] [<service>]
 退出码：成功 `0`（该 service 本来没有覆盖时提示 nothing to do，仍为 `0`）；既没给 service 也没给 `--all` 时为 `1`。
 
 ```bash
-./start rpc:reset user
-./start rpc:reset --all
+./loongs rpc:reset user
+./loongs rpc:reset --all
 ```
 
 ---
@@ -407,9 +407,9 @@ list [options] [--] [<namespace>]
 | `--short` | 不描述命令参数 |
 
 ```bash
-./start list
-./start list rpc
-./start list --format=json
+./loongs list
+./loongs list rpc
+./loongs list --format=json
 ```
 
 ### 5.2 `help` — 命令帮助
@@ -425,9 +425,9 @@ help [options] [--] [<command_name>]
 | `--raw` | 原始帮助 |
 
 ```bash
-./start help rpc:switch
-./start rpc:switch --help        # 等价
-./start help --format=md start
+./loongs help rpc:switch
+./loongs rpc:switch --help        # 等价
+./loongs help --format=md start
 ```
 
 ### 5.3 `completion` — Shell 自动补全
@@ -443,11 +443,11 @@ completion [options] [--] [<shell>]
 
 ```bash
 # 静态安装（全局）
-./start completion bash | sudo tee /etc/bash_completion.d/start
+./loongs completion bash | sudo tee /etc/bash_completion.d/loongs
 # 或写到本地文件后 source
-./start completion bash > completion.sh && source completion.sh
+./loongs completion bash > completion.sh && source completion.sh
 # 动态安装：加到 ~/.bashrc 末尾
-eval "$(/www/wwwroot/loong-swoole/server/start completion bash)"
+eval "$(/www/wwwroot/loong-swoole/server/loongs completion bash)"
 ```
 
 ---
@@ -471,7 +471,7 @@ return [
 
 - 继承 `Loongs\Console\Command` 即可使用 `basePath()` / `io()`（SymfonyStyle）/ `processManager()` / `rpcServices()`。
 - 注册的类如果不是 Symfony `Command` 子类，启动控制台时直接报错（fail fast）。
-- 注册后会出现在 `./start list` 中。
+- 注册后会出现在 `./loongs list` 中。
 
 ---
 

@@ -11,13 +11,13 @@ declare(strict_types=1);
  *
  * Hot switch (no restart): `services` is re-read by every worker when this file or the
  * runtime override file changes (see `hot_reload`). Change targets with:
- *   ./start rpc:show [service]
- *   ./start rpc:switch user loopback http://127.0.0.1:9502
- *   ./start rpc:switch user remote   http://10.0.0.12:9502
- *   ./start rpc:set    user '{"transport":"remote","instances":[{"endpoint":"http://10.0.0.1:9502","weight":1}]}'
- *   ./start rpc:reset  user            (or --all) → back to the values below
+ *   ./loongs rpc:show [service]
+ *   ./loongs rpc:switch user loopback http://127.0.0.1:9502
+ *   ./loongs rpc:switch user remote   http://10.0.0.12:9502
+ *   ./loongs rpc:set    user '{"transport":"remote","instances":[{"endpoint":"http://10.0.0.1:9502","weight":1}]}'
+ *   ./loongs rpc:reset  user            (or --all) → back to the values below
  * Invalid changes are rejected and workers keep the previous map (logged as [rpc-hot]).
- * CLI details: ./start help rpc:switch  (symfony/console; add --no-ansi for plain output).
+ * CLI details: ./loongs help rpc:switch  (symfony/console; add --no-ansi for plain output).
  *
  * Code API (same implementation as the CLI) — e.g. from an admin controller / crontab task:
  *   use Loongs\Rpc\HotReload\RpcServiceManager;          // container-injectable, or rpc_services()
@@ -44,7 +44,7 @@ return [
         'enabled' => filter_var(\Loongs\Support\Env::get('RPC_HOT_RELOAD', true), FILTER_VALIDATE_BOOLEAN),
         // Per-worker Swoole timer; also throttles the call-path check in RpcClient.
         'interval_ms' => (int) \Loongs\Support\Env::get('RPC_HOT_RELOAD_INTERVAL_MS', 1000),
-        // Written atomically by `start rpc:*` (gitignored under runtime/).
+        // Written atomically by `loongs rpc:*` (gitignored under runtime/).
         'override_file' => (string) \Loongs\Support\Env::get('RPC_HOT_RELOAD_FILE', 'runtime/rpc_services.json'),
     ],
     'retry' => [

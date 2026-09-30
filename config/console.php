@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 /**
- * Extra `./start` console commands (symfony/console Command classes with #[AsCommand]).
+ * Extra `./loongs` console commands (symfony/console Command classes with #[AsCommand]).
  * Per-app commands: apps/<App>/config/console.php with the same shape.
  * Extend Loongs\Console\Command to get basePath() / io() / processManager() / rpcServices().
  */

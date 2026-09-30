@@ -26,10 +26,10 @@
 | 命令 | 说明 |
 |---|---|
 | `start` | 启动进程管理器（http / rpc / websocket / queue / crontab / custom） |
-| `stop` | 停止运行中的 master（SIGTERM，30 秒后 SIGKILL） |
+| `stop` | 停止运行中的 master（SIGTERM，30 秒后 SIGKILL）；master 已不在时清理残留孤儿进程 |
 | `restart` | 先 stop（如在运行）再 start |
 | `reload` | 平滑重载：向 master 发 SIGUSR1，子进程重载 worker |
-| `status` | 显示 master 状态与进程表（未运行时退出码 1） |
+| `status` | 显示 master 状态与进程表（未运行 / 孤儿残留时退出码 1） |
 | `rpc:show` | 显示生效的 rpc.services（来源 config / override）及覆盖文件状态 |
 | `rpc:switch` | 热切换某个 service 的 transport：local / loopback / remote（无需重启） |
 | `rpc:set` | 用 JSON 整体替换某个 service 配置（多实例、权重、metadata…） |
@@ -64,7 +64,7 @@
 1. **启动横幅**：框架名称 + 核心版本（`loongs/framework` 的 Composer 版本；dev 分支附带 commit，本地 path/symlink 安装取 checkout 的 HEAD）、应用名称（`APP_NAME` → `config('app.name')`，为空时回退 composer 根包名 `loongs/loongs`）、env/debug、PHP 与 Swoole 版本、RPC io_uring 状态（`-v` 附带原因）、base path、pid 文件、日志去向、前台/daemon。
 2. **运行日志**：master 与子进程统一为 `[时间] 级别 [标签] 消息`；标签为 `master`、`<进程名>#<序号>`（RPC 多 worker 时为 `rpc#0/w1`），按最长标签对齐。io_uring 状态行只由 RPC 进程输出一次。
 3. **进程表**：所有子进程就绪后打印（有端口的进程以端口可连接为准，其余存活 300ms 视为 running，最多等 5s），列出 process / type / app / listen / workers / pid / state / backend（rpc 显示 `uring_socket` 或 `epoll`），随后是 `ProcessManager started ... ready in Xms`。
-4. **停止**（Ctrl+C / `stop`）：`shutting down (SIGINT)` → 各子进程 `child exit ... code=0 signal=0 uptime=... stopped in ...` → `ProcessManager exited shutdown=... uptime=...`。Ctrl+C 时子进程忽略终端发来的 SIGINT，由 master 统一发 SIGTERM 平滑停止。
+4. **停止**（Ctrl+C / `stop`）：`shutting down (SIGINT)` → 各子进程 `child exit ... code=0 signal=0 uptime=... stopped in ...` → `ProcessManager exited shutdown=... uptime=...`。Ctrl+C 时子进程忽略终端发来的 SIGINT，由 master 统一发 SIGTERM 平滑停止。停止过程中**再按一次 Ctrl+C**（或再发一次 SIGTERM/SIGINT）即强制退出：见 [3.6](#36-实例锁孤儿进程与强制退出)。
 
 颜色：仅当 stdout 是终端时着色；`--no-ansi`、管道/重定向、日志文件、daemon 模式均为纯文本。`-q` 隐藏横幅和进程表（运行日志照常输出）。
 
@@ -77,7 +77,13 @@ start [options]
 | `--only=ONLY` | 只启动这些进程：逗号分隔；可写精确名，或用 app 通配（如 `user.*`）；可重复 |
 | `-d, --daemon` | 后台运行（覆盖 `process.daemonize` / `PROCESS_DAEMONIZE`） |
 
-退出码：正常退出 `0`；已在运行（`Already running (pid N)`）或没有可启动的进程时报错并返回 `1`。
+退出码：正常退出 `0`；以下情况报错并返回 `1`（均不会派生任何子进程）：
+- 已在运行（含正在平滑停止中）：`Already running (pid N). Use stop/reload/status.`
+- 另一个 `start` 正在启动：`Another start is in progress (pid N).`
+- 上次的 master 已死但子进程仍存活：`The master is gone but N process(es) of the previous run are still alive (...). Run ./start stop to clean them up.`
+- 配置端口已被占用：`Port 127.0.0.1:19501 for [http] is already in use by pid N <cmdline> (Address already in use). Free the port or change it in .env / config/process.php.`
+- 没有可启动的进程。
+- 被第二次 Ctrl+C / SIGTERM 强制退出（前台）。
 
 ```bash
 ./start                              # 同 ./start start
@@ -152,9 +158,25 @@ $ ./start start --only=http,rpc -d
 stop
 ```
 
-向 master 发 SIGTERM 并等待退出，超过 30 秒则 SIGKILL。
+向 master 发 SIGTERM，等待 master 退出**且**实例锁释放（即所有子进程也已退出），超过 30 秒则 SIGKILL master 及仍持有锁的全部进程。
 
-退出码：已停止或本来就没运行（提示 `Not running.`）为 `0`；超时后 SIGKILL 为 `1`。
+- 是否在运行由实例锁判断（见 3.6），pid 文件里的 pid 若已被系统复用给无关进程，**不会**被发信号，只提示 `Not running.` 并删除陈旧 pid 文件。
+- master 已不在但子进程残留（孤儿）时：提示 `Master is gone; stopping N orphaned process tree(s) (M processes) with SIGTERM: ...`，SIGTERM 各孤儿进程树，10 秒后仍未退出则 SIGKILL。
+- 第二次 SIGTERM：若 master 正在平滑停止（例如 RPC 在等待慢请求），`stop` 在等待期间再对 master 发一次 SIGTERM 即触发强制退出。
+
+退出码：已停止、本来就没运行（`Not running.`）、孤儿已被 SIGTERM 清理为 `0`；超时后 SIGKILL（master 或孤儿）为 `1`。
+
+孤儿清理的真实输出（master 与看门狗被 kill -9、rpc 子进程被 SIGSTOP 以模拟"不响应 SIGTERM"）：
+
+```text
+$ ./start stop --no-ansi
+ [WARNING] Master is gone; stopping 2 orphaned process tree(s) (4 processes)
+           with SIGTERM: pid 429268 loong-swoole: http, pid 429270 loong-swoole:
+           rpc
+ [ERROR] Orphans ignored SIGTERM; sent SIGKILL to 429270 (10.09s).
+$ echo $?
+1
+```
 
 ```bash
 ./start stop
@@ -183,7 +205,7 @@ restart [options]
 reload
 ```
 
-向 master 发 SIGUSR1，子进程重载各自的 worker。
+向 master 发 SIGUSR1，子进程重载各自的 worker。是否在运行与 `stop`/`status` 同样按实例锁判断，不会向复用了 pid 的无关进程发信号。
 
 退出码：已发送为 `0`；未运行（`Not running.`）为 `1`。
 
@@ -193,7 +215,7 @@ reload
 
 ### 3.5 `status` — 状态
 
-显示 master 状态、pid 文件，以及合并后（全局 + 各 app）的进程表。表列为 process / type / app / listen / count / pid / state，state 取值为 running、stopped、not running、disabled。只读操作，不影响运行中的服务。
+显示 master 状态、pid 文件，以及合并后（全局 + 各 app）的进程表。表列为 process / type / app / listen / count / pid / state，state 取值为 running、stopped、not running、orphaned、disabled。master 状态按实例锁判断（pid 文件 + 锁被持有 + 该 pid 是锁持有者）；陈旧 pid 文件只在确认无人持锁时才删除。master 已不在但仍有本实例进程时显示 `orphaned` 及 `→ run ./start stop to clean them up`。只读操作，不影响运行中的服务。
 
 ```
 status [options]
@@ -203,7 +225,7 @@ status [options]
 |---|---|
 | `--only=ONLY` | 只把这些进程标记为选中（语法同 `start --only`，可重复） |
 
-退出码：运行中 `0`；未运行 `1`。
+退出码：运行中 `0`；未运行或孤儿残留 `1`。
 
 ```bash
 ./start status
@@ -235,6 +257,53 @@ Loongs status
 ```
 
 （`user.stats` / `website.crontab` 来自本地 apps，具体以你的 apps 为准。）
+
+孤儿残留时（节选）：
+
+```text
+  master: stopped
+  orphaned: the master is gone but 2 process(es) are still alive: pid 429268 loong-swoole: http, pid 429270 loong-swoole: rpc
+  → run ./start stop to clean them up
+  ...
+  http              http        -         127.0.0.1:19501   1 × 2w   429268   orphaned
+  rpc               rpc         -         127.0.0.1:19502   1 × 1w   429270   orphaned
+```
+
+### 3.6 实例锁、孤儿进程与强制退出
+
+**实例锁**：pid 文件旁有锁文件 `<pid 文件去掉 .pid>.lock`（默认 `runtime/loong-swoole.lock`，永不删除）。`start` 在任何 fork / daemonize **之前**以 `flock(LOCK_EX|LOCK_NB)` 取锁（最多重试 1 秒），取到后立刻写 pid 文件，daemonize 后再以 daemon 的 pid 覆盖。锁的打开文件描述会被所有子进程继承，因此只要本实例还有任何进程活着，锁就一直被持有：
+
+- 同时执行多个 `start`（实测 10 个并发）只有一个成功，其余报 `Already running (pid N)`（或 `Another start is in progress`），退出码 1。
+- 平滑停止期间（RPC 在排空请求）再 `start` 会被拒绝：`Already running (pid N)`。
+- `status` / `stop` / `reload` / `start` 都以"锁被持有且 pid 文件里的 pid 是锁持有者"判断是否在运行，不再只看 `posix_kill(pid, 0)`；pid 被复用给无关进程时视为未运行，也不会给它发信号。
+
+**端口预检**：取锁后、fork 之前逐个 bind 配置端口（**不**设 SO_REUSEPORT，因此即使对方用 SO_REUSEPORT 监听、而 RPC 本身使用 reuse_port 也能发现冲突），被占用时从 `/proc/net/tcp*` 找出占用者 pid 与命令行并拒绝启动（退出码 1，pid 文件被清除、锁被释放）。
+
+**master 意外死亡（kill -9、终端关闭）**：每个子进程在启动角色前 fork 一个看门狗（进程名 `loong-swoole: watchdog <tag>`），每 200ms 检查 master 是否仍在；master 消失后看门狗对子进程发 SIGTERM（平滑退出），15 秒后仍未退出则 SIGKILL 其整棵进程树。实测 kill -9 master 后 0.38s 内所有进程退出，端口释放，下次 `start` 正常。若仍有残留（看门狗也被杀、子进程卡死），`status` 显示 `orphaned`，`start` 拒绝并提示运行 `./start stop`，`stop` 负责清理（见 3.2）。
+
+**强制退出**：平滑停止期间第二次收到 SIGINT / SIGTERM（前台再按一次 Ctrl+C，或 daemon 再 `kill -TERM`），master 立刻 SIGKILL 剩余子进程（含看门狗），删除 pid 文件、释放锁并记录：
+
+```text
+[2026-09-30 12:18:13] INFO  [master] shutting down (SIGINT): stopping 2 children with SIGTERM
+[2026-09-30 12:18:13] INFO  [rpc#0]  RPC stopping (SIGTERM): draining 1 in-flight request(s), max 10s
+[2026-09-30 12:18:13] INFO  [master] child exit http#0 pid=428924 code=0 signal=0 uptime=695ms stopped in 101ms
+[2026-09-30 12:18:14] WARN  [master] SIGINT again during shutdown (after 1.52s): force exit — SIGKILL 2 process(es): 428926,428927
+[2026-09-30 12:18:14] WARN  [master] child exit rpc#0 pid=428926 code=0 signal=9 uptime=2.12s stopped in 1.54s
+[2026-09-30 12:18:14] INFO  [master] ProcessManager exited (forced) shutdown=1.54s uptime=2.14s
+```
+
+前台被强制退出时 `start` 的退出码为 `1`（实测第二次 Ctrl+C 后 0.05s 退出，无残留进程，端口已释放；在途请求被中断）。
+
+**停止超时一览**：
+
+| 阶段 | 时长 | 超时后 |
+|---|---|---|
+| RPC 排空在途请求 | `min(max_wait_time, 10)` 秒 | 直接退出事件循环 |
+| master 等待子进程退出（`STOP_GRACE`） | 15 秒 | SIGKILL 子进程树 |
+| `./start stop` 等待 master + 锁释放 | 30 秒 | SIGKILL master 及所有锁持有者 |
+| `./start stop` 清理孤儿 | 10 秒 | SIGKILL |
+| 看门狗：master 消失后等待子进程（`ORPHAN_GRACE`） | 15 秒 | SIGKILL 子进程树 |
+| 第二次 Ctrl+C / SIGTERM | 立即 | SIGKILL 全部，退出码 1 |
 
 ---
 

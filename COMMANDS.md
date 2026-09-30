@@ -58,7 +58,15 @@
 
 ### 3.1 `start` — 启动
 
-启动 master 并按 `config/process.php` 的 `processes` 派生所有 enabled 子进程。默认前台运行，直到收到 SIGTERM/SIGINT（即 `stop` 或 Ctrl+C）；`-d` 为后台运行。master / 子进程日志是纯文本，不带颜色。
+启动 master 并按 `config/process.php` 的 `processes` 派生所有 enabled 子进程。默认前台运行，直到收到 SIGTERM/SIGINT（即 `stop` 或 Ctrl+C）；`-d` 为后台运行。
+
+启动时依次输出：
+1. **启动横幅**：框架名称 + 核心版本（`loongs/framework` 的 Composer 版本；dev 分支附带 commit，本地 path/symlink 安装取 checkout 的 HEAD）、应用名称（`APP_NAME` → `config('app.name')`，为空时回退 composer 根包名 `loongs/loongs`）、env/debug、PHP 与 Swoole 版本、RPC io_uring 状态（`-v` 附带原因）、base path、pid 文件、日志去向、前台/daemon。
+2. **运行日志**：master 与子进程统一为 `[时间] 级别 [标签] 消息`；标签为 `master`、`<进程名>#<序号>`（RPC 多 worker 时为 `rpc#0/w1`），按最长标签对齐。io_uring 状态行只由 RPC 进程输出一次。
+3. **进程表**：所有子进程就绪后打印（有端口的进程以端口可连接为准，其余存活 300ms 视为 running，最多等 5s），列出 process / type / app / listen / workers / pid / state / backend（rpc 显示 `uring_socket` 或 `epoll`），随后是 `ProcessManager started ... ready in Xms`。
+4. **停止**（Ctrl+C / `stop`）：`shutting down (SIGINT)` → 各子进程 `child exit ... code=0 signal=0 uptime=... stopped in ...` → `ProcessManager exited shutdown=... uptime=...`。Ctrl+C 时子进程忽略终端发来的 SIGINT，由 master 统一发 SIGTERM 平滑停止。
+
+颜色：仅当 stdout 是终端时着色；`--no-ansi`、管道/重定向、日志文件、daemon 模式均为纯文本。`-q` 隐藏横幅和进程表（运行日志照常输出）。
 
 ```
 start [options]
@@ -75,6 +83,67 @@ start [options]
 ./start                              # 同 ./start start
 ./start start --only=http,rpc
 ./start start --only='user.*' -d
+```
+
+前台启动 + Ctrl+C 的真实输出（`--no-ansi`；测试端口 19501/19502、`HTTP_WORKER_NUM=2`，pid/log 文件为测试用的 `*-demo.*`）：
+
+```text
+$ ./start start --only=http,rpc --no-ansi
+ Loongs dev-main@4a2d8cd  ·  loongs
+
+  Framework  Loongs dev-main@4a2d8cd (loongs/framework)
+  App        loongs  env=local  debug=on
+  Runtime    PHP 8.4.25  ·  Swoole 6.2.2
+  io_uring   on  network=uring_socket  coverage=file+network  mode=auto
+  Base path  /www/wwwroot/loong-swoole/server
+  Pid file   runtime/loong-swoole-demo.pid
+  Log        stdout (runtime/loong-swoole-demo.log in daemon mode)
+  Mode       foreground (Ctrl+C or ./start stop)
+
+[2026-09-30 11:36:04] INFO  [master] spawned http#0 type=http pid=423651
+[2026-09-30 11:36:04] INFO  [master] spawned rpc#0 type=rpc pid=423652
+[2026-09-30 11:36:04] INFO  [http#0] HTTP server starting Swoole\Http\Server on 127.0.0.1:19501 workers=2
+[2026-09-30 11:36:04] INFO  [rpc#0]  RPC io_uring backend=uring_socket (active) network=uring_socket/on mode=auto coverage=file+network reason=Coroutine\Http\Server + Coroutine\Http\Client use UringSocket (compile-time SocketImpl)
+[2026-09-30 11:36:04] INFO  [rpc#0]  RPC server starting Coroutine\Http\Server network=uring_socket on 127.0.0.1:19502 path=/rpc workers=1
+ --------- ------ ----- ----------------- --------- -------- ----------- --------------
+  process   type   app   listen            workers   pid      state       backend
+ --------- ------ ----- ----------------- --------- -------- ----------- --------------
+  http      http   -     127.0.0.1:19501   2         423651   listening   epoll
+  rpc       rpc    -     127.0.0.1:19502   1         423652   listening   uring_socket
+ --------- ------ ----- ----------------- --------- -------- ----------- --------------
+
+[2026-09-30 11:36:04] INFO  [master] ProcessManager started pid=423646 children=2 ready in 59ms
+[2026-09-30 11:36:05] INFO  [master] shutting down (SIGINT): stopping 2 children with SIGTERM
+[2026-09-30 11:36:05] INFO  [rpc#0]  RPC stopped (SIGTERM) in-flight=0 drained in 0ms
+[2026-09-30 11:36:05] INFO  [master] child exit http#0 pid=423651 code=0 signal=0 uptime=994ms stopped in 101ms
+[2026-09-30 11:36:05] INFO  [master] child exit rpc#0 pid=423652 code=0 signal=0 uptime=993ms stopped in 101ms
+[2026-09-30 11:36:05] INFO  [master] ProcessManager exited shutdown=102ms uptime=996ms
+```
+
+`-d` 后台启动：终端只打印横幅和计划表（pid 未知，state=starting），之后 master 与所有子进程的 stdout/stderr（运行日志、PHP 警告、Swoole 日志）都写入 `process.log_file`（纯文本）：
+
+```text
+$ ./start start --only=http,rpc -d
+
+ Loongs dev-main@4a2d8cd  ·  loongs
+
+  Framework  Loongs dev-main@4a2d8cd (loongs/framework)
+  App        loongs  env=local  debug=on
+  Runtime    PHP 8.4.25  ·  Swoole 6.2.2
+  io_uring   on  network=uring_socket  coverage=file+network  mode=auto
+  Base path  /www/wwwroot/loong-swoole/server
+  Pid file   runtime/loong-swoole-demo.pid
+  Log        runtime/loong-swoole-demo.log
+  Mode       daemon
+
+ --------- ------ ----- ----------------- --------- ----- ---------- --------------
+  process   type   app   listen            workers   pid   state      backend
+ --------- ------ ----- ----------------- --------- ----- ---------- --------------
+  http      http   -     127.0.0.1:19501   2         -     starting   epoll
+  rpc       rpc    -     127.0.0.1:19502   1         -     starting   uring_socket
+ --------- ------ ----- ----------------- --------- ----- ---------- --------------
+
+ Running in the background. Logs: runtime/loong-swoole-demo.log · ./start status · ./start stop
 ```
 
 ### 3.2 `stop` — 停止
@@ -344,7 +413,7 @@ return [
 | 键 | 作用 |
 |---|---|
 | `PROCESS_PID_FILE` | master pid 文件（默认 `runtime/loong-swoole.pid`） |
-| `PROCESS_LOG_FILE` | 日志文件配置（默认 `runtime/loong-swoole.log`） |
+| `PROCESS_LOG_FILE` | daemon 模式下 master + 子进程 stdout/stderr 的去向（默认 `runtime/loong-swoole.log`，追加写，纯文本）；前台模式输出到终端 |
 | `PROCESS_DAEMONIZE` | 是否后台运行（`start -d` 可覆盖） |
 | `HTTP_ENABLED` / `HTTP_HOST` / `HTTP_PORT` / `HTTP_WORKER_NUM` | HTTP 进程（默认端口 9501） |
 | `RPC_ENABLED` / `RPC_HOST` / `RPC_PORT` / `RPC_WORKER_NUM` | RPC 进程（默认端口 9502，loopback 缺省 endpoint 也用 `RPC_PORT`） |

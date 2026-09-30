@@ -10,5 +10,6 @@ declare(strict_types=1);
 return [
     'commands' => [
         // App\Website\Console\CacheWarmCommand::class,
+        \Loongs\OAuth\Console\InstallCommand::class,   // ./loongs oauth:install [connection] (loongs/oauth tables)
     ],
 ];

@@ -672,7 +672,7 @@ return [
 
 ## 8. Composer 命令
 
-**部署 / 使用者**：依赖来自 Packagist（`loongs/framework`、`loongs/cache`、`loongs/helper`、`loongs/orm`、`symfony/console` 等，`loongs/*` 约束 `dev-main`）。
+**部署 / 使用者**：依赖来自 Packagist（`loongs/framework`、`loongs/cache`、`loongs/helper`、`loongs/orm`、`loongs/oauth`、`symfony/console` 等，`loongs/*` 约束 `dev-main`）。
 
 ```bash
 cd server
@@ -683,7 +683,9 @@ composer config -g repos.packagist composer https://mirrors.cloud.tencent.com/co
 
 ⚠ 腾讯镜像的 dist zip 按版本名缓存（`…/loongs/framework/dev-main/loongs-framework-dev-main.zip`），`dev-main` 可能给旧代码：2026-09-30 实测 lock 写 `bb2fdba`，zip 里却是旧提交 `4a2d8cd`（`composer --version`/`./loongs --version` 看不出来）。验证 `loongs/*` 新提交请直连 Packagist（dist = GitHub zipball，按 ref），或 `diff -rq vendor/loongs/framework/src ../composer/framework/src`。 实测直连 Packagist 的干净 clone：`vendor/loongs/framework/src` 与 `bb2fdba` 源码 0 个文件不同，`./loongs --version` = `Loongs dev-main@bb2fdba`，`Str::slug("Hello World 2026")` = `hello-world-2026`。
 
-**本地框架开发**：`composer.dev.json` 只在本地使用（不入库），以 path 仓库软链到 `../composer/framework`、`../composer/cache`、`../composer/helper`、`../composer/orm`（`loongs/helper`、`loongs/orm` 也都在 Packagist，`composer.json` 与 `composer.dev.json` 都 require 它们）。
+**本地框架开发**：`composer.dev.json` 只在本地使用（不入库），以 path 仓库软链到 `../composer/framework`、`../composer/cache`、`../composer/helper`、`../composer/orm`、`../composer/oauth`（`loongs/helper`、`loongs/orm`、`loongs/oauth` 也都在 Packagist，`composer.json` 与 `composer.dev.json` 都 require 它们）。
+
+**OAuth 建表**：`./loongs oauth:install [连接名|mysql://…] [--prefix=] [--engine=] [--charset=] [--collation=] [--dry-run]`（`config/console.php` 已注册 `Loongs\OAuth\Console\InstallCommand`）。DDL 按该连接配置的 prefix / engine / charset / collation 生成，`CREATE TABLE IF NOT EXISTS`（幂等，不建库、不改已有表）；PHP 里 `OrmStorage::installOn($连接或租户配置)`。
 
 ```bash
 cd server

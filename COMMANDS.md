@@ -1,0 +1,398 @@
+# loongs 命令速查（server/）
+
+本文件列出 `server/` 下所有可执行命令及用法，内容取自 `./start list --no-ansi` / `./start help <命令> --no-ansi` 的真实输出。
+命令行基于 **symfony/console**（`Loongs\Console\Kernel`），业务逻辑在 `Loongs\Process\ProcessManager` / `Loongs\Rpc\HotReload\RpcServiceManager`。
+
+> 查看最新帮助：`./start list`、`./start help <命令>`（加 `--no-ansi` 得到纯文本）。
+
+---
+
+## 0. 如何运行
+
+在 `server/` 目录下：
+
+```bash
+./start <命令> [参数] [选项]
+# 宝塔等面板的 PHP 常禁用 pcntl_* 等函数，推荐显式放开：
+/www/server/php/84/bin/php -d disable_functions= start <命令> [参数] [选项]
+```
+
+- `server/start` 是入口脚本：定义 `LOONGS_BASE_PATH = __DIR__`，加载 `vendor/autoload.php`，运行控制台。缺少 vendor 时提示 `Autoloader not found. Run: composer update` 并退出 1。
+- 不带命令时默认执行 `start`：`./start` 等价于 `./start start`，`./start --only=http,rpc` 同样有效。
+- 可在任意目录用绝对路径执行（如 `/www/wwwroot/loong-swoole/server/start status`），基准目录固定为 `start` 所在目录。
+
+## 1. 命令总览
+
+| 命令 | 说明 |
+|---|---|
+| `start` | 启动进程管理器（http / rpc / websocket / queue / crontab / custom） |
+| `stop` | 停止运行中的 master（SIGTERM，30 秒后 SIGKILL） |
+| `restart` | 先 stop（如在运行）再 start |
+| `reload` | 平滑重载：向 master 发 SIGUSR1，子进程重载 worker |
+| `status` | 显示 master 状态与进程表（未运行时退出码 1） |
+| `rpc:show` | 显示生效的 rpc.services（来源 config / override）及覆盖文件状态 |
+| `rpc:switch` | 热切换某个 service 的 transport：local / loopback / remote（无需重启） |
+| `rpc:set` | 用 JSON 整体替换某个 service 配置（多实例、权重、metadata…） |
+| `rpc:reset` | 删除运行时覆盖，回到 `config/rpc.php` |
+| `completion` | 输出 shell 自动补全脚本 |
+| `help` | 显示某个命令的帮助 |
+| `list` | 列出所有命令 |
+
+## 2. 全局选项（所有命令可用）
+
+| 选项 | 说明 |
+|---|---|
+| `-h, --help` | 显示该命令帮助（不带命令时显示 `start` 的帮助） |
+| `--silent` | 不输出任何信息 |
+| `-q, --quiet` | 只输出错误，其余全部屏蔽（退出码不变） |
+| `-V, --version` | 显示版本（如 `Loongs dev-main@<commit>`） |
+| `--ansi` / `--no-ansi` | 强制开启 / 关闭颜色。输出不是终端（管道、重定向、日志文件）时自动无颜色 |
+| `-n, --no-interaction` | 不进行任何交互询问 |
+| `-v` / `-vv` / `-vvv`, `--verbose` | 提高输出详细程度（如 `status -v` 额外显示 log 文件与 daemonize） |
+
+通用退出码：成功 `0`；未知命令、缺少参数、校验失败等为 `1`。
+
+---
+
+## 3. 进程管理命令
+
+### 3.1 `start` — 启动
+
+启动 master 并按 `config/process.php` 的 `processes` 派生所有 enabled 子进程。默认前台运行，直到收到 SIGTERM/SIGINT（即 `stop` 或 Ctrl+C）；`-d` 为后台运行。master / 子进程日志是纯文本，不带颜色。
+
+```
+start [options]
+```
+
+| 选项 | 说明 |
+|---|---|
+| `--only=ONLY` | 只启动这些进程：逗号分隔；可写精确名，或用 app 通配（如 `user.*`）；可重复 |
+| `-d, --daemon` | 后台运行（覆盖 `process.daemonize` / `PROCESS_DAEMONIZE`） |
+
+退出码：正常退出 `0`；已在运行（`Already running (pid N)`）或没有可启动的进程时报错并返回 `1`。
+
+```bash
+./start                              # 同 ./start start
+./start start --only=http,rpc
+./start start --only='user.*' -d
+```
+
+### 3.2 `stop` — 停止
+
+```
+stop
+```
+
+向 master 发 SIGTERM 并等待退出，超过 30 秒则 SIGKILL。
+
+退出码：已停止或本来就没运行（提示 `Not running.`）为 `0`；超时后 SIGKILL 为 `1`。
+
+```bash
+./start stop
+```
+
+### 3.3 `restart` — 重启
+
+`stop`（SIGTERM，等待）后用相同选项 `start`。如只需平滑重载 worker，用 `reload`。
+
+```
+restart [options]
+```
+
+选项与 `start` 相同：`--only=ONLY`、`-d, --daemon`。
+
+退出码：stop 失败则返回 stop 的退出码，否则返回 start 的退出码。
+
+```bash
+./start restart -d
+./start restart --only=http,rpc
+```
+
+### 3.4 `reload` — 平滑重载
+
+```
+reload
+```
+
+向 master 发 SIGUSR1，子进程重载各自的 worker。
+
+退出码：已发送为 `0`；未运行（`Not running.`）为 `1`。
+
+```bash
+./start reload
+```
+
+### 3.5 `status` — 状态
+
+显示 master 状态、pid 文件，以及合并后（全局 + 各 app）的进程表。表列为 process / type / app / listen / count / pid / state，state 取值为 running、stopped、not running、disabled。只读操作，不影响运行中的服务。
+
+```
+status [options]
+```
+
+| 选项 | 说明 |
+|---|---|
+| `--only=ONLY` | 只把这些进程标记为选中（语法同 `start --only`，可重复） |
+
+退出码：运行中 `0`；未运行 `1`。
+
+```bash
+./start status
+./start status -v          # 额外显示 log file / daemonize
+./start status --no-ansi   # 纯文本（脚本解析用）
+```
+
+未运行时的真实输出示例（`--no-ansi`）：
+
+```
+Loongs status
+=============
+
+  master: stopped
+  pid file: /www/wwwroot/loong-swoole/server/runtime/loong-swoole.pid
+
+ ----------------- ----------- --------- -------------- -------- ----- ---------- 
+  process           type        app       listen         count    pid   state     
+ ----------------- ----------- --------- -------------- -------- ----- ---------- 
+  http              http        -         0.0.0.0:9501   1 × 1w   -     stopped   
+  rpc               rpc         -         0.0.0.0:9502   1 × 1w   -     stopped   
+  websocket         websocket   -         0.0.0.0:9503   1 × 1w   -     disabled  
+  queue             queue       -         -              1        -     disabled  
+  crontab           crontab     -         -              1        -     disabled  
+  custom-example    custom      -         -              1        -     disabled  
+  user.stats        custom      User      -              1        -     disabled  
+  website.crontab   crontab     Website   -              1        -     disabled  
+ ----------------- ----------- --------- -------------- -------- ----- ---------- 
+```
+
+（`user.stats` / `website.crontab` 来自本地 apps，具体以你的 apps 为准。）
+
+---
+
+## 4. RPC 热切换命令（无需重启）
+
+作用对象是 `config/rpc.php` 的 `services`。写操作会先严格校验，再以原子方式（临时文件 + rename）写入覆盖文件 `rpc.hot_reload.override_file`（默认 `runtime/rpc_services.json`）。运行中的 worker 在 `rpc.hot_reload.interval_ms`（默认 1000ms）内生效。校验失败时输出错误块、退出码 `1`，覆盖文件不变。
+
+代码中也可以用同一套实现：`rpc_services()->switch(...)` / `set` / `reset` / `resetAll` / `show` / `reload` / `version`，详见 `config/rpc.php` 顶部注释。
+
+### 4.1 `rpc:show` — 查看
+
+```
+rpc:show [<service>]
+```
+
+| 参数 | 说明 |
+|---|---|
+| `service` | 可选，只看该 service |
+
+输出包括：hot reload 状态与间隔、config 文件、覆盖文件状态，以及表格 service / source / # / transport / endpoint / weight / timeout_ms / metadata。
+
+退出码：正常 `0`；覆盖文件或生效配置无效时 `1`（此时 worker 继续使用旧配置）；指定的 service 不存在时 `1`。
+
+```bash
+./start rpc:show
+./start rpc:show user
+```
+
+### 4.2 `rpc:switch` — 切换 transport
+
+```
+rpc:switch <service> <transport> [<endpoint>]
+```
+
+| 参数 | 说明 |
+|---|---|
+| `service` | `config/rpc.php` 中的 service 名（如 `user`） |
+| `transport` | `local` / `loopback` / `remote` |
+| `endpoint` | `http(s)://host:port`；`remote` 必填；`loopback` 缺省为 `http://127.0.0.1:$RPC_PORT` |
+
+保留当前条目的 `timeout_ms` / `metadata`。
+
+退出码：成功 `0`；未知 transport、remote 缺 endpoint、非法 URL、未定义的 service 均为 `1`。
+
+```bash
+./start rpc:switch user loopback
+./start rpc:switch user remote http://10.0.0.12:9502
+./start rpc:switch user local
+```
+
+### 4.3 `rpc:set` — 整体设置
+
+```
+rpc:set <service> <json>
+```
+
+| 参数 | 说明 |
+|---|---|
+| `service` | service 名 |
+| `json` | 该 service 的完整配置（JSON 对象） |
+
+退出码：成功 `0`；JSON 非法、非对象、校验失败（如负权重、非法 endpoint）为 `1`。
+
+```bash
+./start rpc:set user '{"transport":"remote","instances":[{"endpoint":"http://10.0.0.1:9502","weight":1},{"endpoint":"http://10.0.0.2:9502","weight":3}]}'
+```
+
+### 4.4 `rpc:reset` — 恢复
+
+```
+rpc:reset [options] [--] [<service>]
+```
+
+| 参数 / 选项 | 说明 |
+|---|---|
+| `service` | 要恢复的 service |
+| `-a, --all` | 删除全部覆盖（也可修复无效的覆盖文件） |
+
+退出码：成功 `0`（该 service 本来没有覆盖时提示 nothing to do，仍为 `0`）；既没给 service 也没给 `--all` 时为 `1`。
+
+```bash
+./start rpc:reset user
+./start rpc:reset --all
+```
+
+---
+
+## 5. 辅助命令
+
+### 5.1 `list` — 列出命令
+
+```
+list [options] [--] [<namespace>]
+```
+
+| 参数 / 选项 | 说明 |
+|---|---|
+| `namespace` | 只列出该命名空间（如 `rpc`） |
+| `--raw` | 原始列表（便于嵌入其它工具） |
+| `--format=FORMAT` | 输出格式 txt / xml / json / md，默认 txt |
+| `--short` | 不描述命令参数 |
+
+```bash
+./start list
+./start list rpc
+./start list --format=json
+```
+
+### 5.2 `help` — 命令帮助
+
+```
+help [options] [--] [<command_name>]
+```
+
+| 参数 / 选项 | 说明 |
+|---|---|
+| `command_name` | 命令名，默认 `help` |
+| `--format=FORMAT` | txt / xml / json / md，默认 txt |
+| `--raw` | 原始帮助 |
+
+```bash
+./start help rpc:switch
+./start rpc:switch --help        # 等价
+./start help --format=md start
+```
+
+### 5.3 `completion` — Shell 自动补全
+
+```
+completion [options] [--] [<shell>]
+```
+
+| 参数 / 选项 | 说明 |
+|---|---|
+| `shell` | shell 类型（bash / fish / zsh）；不写则使用 `$SHELL` |
+| `--debug` | 跟踪补全调试日志 |
+
+```bash
+# 静态安装（全局）
+./start completion bash | sudo tee /etc/bash_completion.d/start
+# 或写到本地文件后 source
+./start completion bash > completion.sh && source completion.sh
+# 动态安装：加到 ~/.bashrc 末尾
+eval "$(/www/wwwroot/loong-swoole/server/start completion bash)"
+```
+
+---
+
+## 6. 扩展自定义命令
+
+可在以下文件注册自己的 symfony/console 命令（`Command` 子类 + `#[AsCommand]`）：
+
+- 全局：`server/config/console.php`
+- 单个 app：`server/apps/<App>/config/console.php`（格式相同）
+
+```php
+<?php
+// server/config/console.php
+return [
+    'commands' => [
+        App\Website\Console\CacheWarmCommand::class,
+    ],
+];
+```
+
+- 继承 `Loongs\Console\Command` 即可使用 `basePath()` / `io()`（SymfonyStyle）/ `processManager()` / `rpcServices()`。
+- 注册的类如果不是 Symfony `Command` 子类，启动控制台时直接报错（fail fast）。
+- 注册后会出现在 `./start list` 中。
+
+---
+
+## 7. 相关 .env 键（均已在 config 中使用）
+
+**进程管理**
+
+| 键 | 作用 |
+|---|---|
+| `PROCESS_PID_FILE` | master pid 文件（默认 `runtime/loong-swoole.pid`） |
+| `PROCESS_LOG_FILE` | 日志文件配置（默认 `runtime/loong-swoole.log`） |
+| `PROCESS_DAEMONIZE` | 是否后台运行（`start -d` 可覆盖） |
+| `HTTP_ENABLED` / `HTTP_HOST` / `HTTP_PORT` / `HTTP_WORKER_NUM` | HTTP 进程（默认端口 9501） |
+| `RPC_ENABLED` / `RPC_HOST` / `RPC_PORT` / `RPC_WORKER_NUM` | RPC 进程（默认端口 9502，loopback 缺省 endpoint 也用 `RPC_PORT`） |
+| `WS_ENABLED` / `WS_HOST` / `WS_PORT` / `WS_WORKER_NUM` / `WS_HANDLER` | WebSocket 进程 |
+| `QUEUE_ENABLED` / `QUEUE_COUNT` / `QUEUE_CONNECTION` / `QUEUE_QUEUES` / `QUEUE_PREFIX` / `QUEUE_TIMEOUT` | 队列进程 |
+| `CRONTAB_ENABLED` | 定时任务进程 |
+| `CUSTOM_EXAMPLE_ENABLED` / `CUSTOM_EXAMPLE_INTERVAL` / `CUSTOM_EXAMPLE_KEY` | 示例自定义进程 |
+
+**RPC**
+
+| 键 | 作用 |
+|---|---|
+| `RPC_NODE` | 实例标记；非空时响应带 `meta.served_by {node, pid}` |
+| `RPC_HOT_RELOAD` | 是否开启 services 热加载（默认 true） |
+| `RPC_HOT_RELOAD_INTERVAL_MS` | 热加载检查间隔（默认 1000） |
+| `RPC_HOT_RELOAD_FILE` | 运行时覆盖文件（默认 `runtime/rpc_services.json`） |
+| `RPC_IOURING` | io_uring 模式 `auto` / `on` / `off` |
+| `RPC_IOURING_ENTRIES` / `RPC_IOURING_WORKERS` / `RPC_IOURING_FLAG` | io_uring 参数 |
+
+其它键（`APP_*`、`DB_*`、`REDIS_*`、`CACHE_*`）见 `.env.example`。`.env` 在 master 启动时加载，修改后需要 `restart` 才能确保生效；只有 `rpc.services` 支持不重启热加载（`rpc:*` 命令或直接编辑 `config/rpc.php`）。
+
+---
+
+## 8. Composer 命令
+
+**部署 / 使用者**：依赖来自 Packagist（`loongs/framework`、`loongs/cache`、`symfony/console` 等）。
+
+```bash
+cd server
+composer install
+# 如果 repo.packagist.org 连不上，可改用腾讯镜像：
+composer config -g repos.packagist composer https://mirrors.cloud.tencent.com/composer/
+```
+
+**本地框架开发**：`composer.dev.json` 只在本地使用（不入库），以 path 仓库软链到 `../composer/framework`、`../composer/cache`。
+
+```bash
+cd server
+COMPOSER=composer.dev.json composer update
+```
+
+---
+
+## 9. bin/ 下的运维脚本（已入库）
+
+| 脚本 | 用途 |
+|---|---|
+| `sudo ./bin/iouring.sh` | 为 PHP 8.4 编译安装启用 io_uring / uring_socket 的 Swoole 6.2.2（先备份原 swoole.so）。可用环境变量 `PHP_BIN` / `PHP_CONFIG` / `SWOOLE_VER` / `BUILD_DIR` |
+| `sudo ./bin/remove_disable_functions.sh` | 移除宝塔 PHP 的 `disable_functions`。`--swoole` 只移除 Swoole 常用函数；`--php=83` 指定版本（默认 84）；`--dry-run` 只显示改动；`--restore` 从最近一次备份还原；`--all` 全部清空（默认） |
+
+本地另有 `bin/smoke_*` 冒烟脚本，已 gitignore，不随仓库发布。

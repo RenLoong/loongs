@@ -61,7 +61,7 @@
 启动 master 并按 `config/process.php` 的 `processes` 派生所有 enabled 子进程。默认前台运行，直到收到 SIGTERM/SIGINT（即 `stop` 或 Ctrl+C）；`-d` 为后台运行。
 
 启动时依次输出：
-1. **启动横幅**：框架名称 + 核心版本（`loongs/framework` 的 Composer 版本；dev 分支附带 commit，本地 path/symlink 安装取 checkout 的 HEAD）、应用名称（`APP_NAME` → `config('app.name')`，为空时回退 composer 根包名 `loongs/loongs`）、env/debug、PHP 与 Swoole 版本、RPC io_uring 状态（`-v` 附带原因）、base path、pid 文件、日志去向、前台/daemon。
+1. **启动横幅**：框架名称 + 核心版本（`loongs/framework` 的 Composer 版本；dev 分支附带 commit，本地 path/symlink 安装取 checkout 的 HEAD）、应用名称（`APP_NAME` → `config('app.name')`，只允许字母/数字/下划线，为空或未设时为 `loongs`，见 [3.7](#37-app_name-与同机多服务)）、env/debug、PHP 与 Swoole 版本、RPC io_uring 状态（`-v` 附带原因）、base path、进程标题（`Titles  loong-swoole[<APP_NAME>]: master / <role>`）、pid 文件、日志去向、前台/daemon。
 2. **运行日志**：master 与子进程统一为 `[时间] 级别 [标签] 消息`；标签为 `master`、`<进程名>#<序号>`（RPC 多 worker 时为 `rpc#0/w1`），按最长标签对齐。io_uring 状态行只由 RPC 进程输出一次。
 3. **进程表**：所有子进程就绪后打印（有端口的进程以端口可连接为准，其余存活 300ms 视为 running，最多等 5s），列出 process / type / app / listen / workers / pid / state / backend（rpc 显示 `uring_socket` 或 `epoll`），随后是 `ProcessManager started ... ready in Xms`。
 4. **停止**（Ctrl+C / `stop`）：`shutting down (SIGINT)` → 各子进程 `child exit ... code=0 signal=0 uptime=... stopped in ...` → `ProcessManager exited shutdown=... uptime=...`。Ctrl+C 时子进程忽略终端发来的 SIGINT，由 master 统一发 SIGTERM 平滑停止。停止过程中**再按一次 Ctrl+C**（或再发一次 SIGTERM/SIGINT）即强制退出：见 [3.6](#36-实例锁孤儿进程与强制退出)。
@@ -171,8 +171,8 @@ stop
 ```text
 $ ./loongs stop --no-ansi
  [WARNING] Master is gone; stopping 2 orphaned process tree(s) (4 processes)
-           with SIGTERM: pid 429268 loong-swoole: http, pid 429270 loong-swoole:
-           rpc
+           with SIGTERM: pid 429268 loong-swoole[loongs]: http, pid 429270
+           loong-swoole[loongs]: rpc
  [ERROR] Orphans ignored SIGTERM; sent SIGKILL to 429270 (10.09s).
 $ echo $?
 1
@@ -262,7 +262,7 @@ Loongs status
 
 ```text
   master: stopped
-  orphaned: the master is gone but 2 process(es) are still alive: pid 429268 loong-swoole: http, pid 429270 loong-swoole: rpc
+  orphaned: the master is gone but 2 process(es) are still alive: pid 429268 loong-swoole[loongs]: http, pid 429270 loong-swoole[loongs]: rpc
   → run ./loongs stop to clean them up
   ...
   http              http        -         127.0.0.1:19501   1 × 2w   429268   orphaned
@@ -271,7 +271,7 @@ Loongs status
 
 ### 3.6 实例锁、孤儿进程与强制退出
 
-**实例锁**：pid 文件旁有锁文件 `<pid 文件去掉 .pid>.lock`（默认 `runtime/loong-swoole.lock`，永不删除）。`start` 在任何 fork / daemonize **之前**以 `flock(LOCK_EX|LOCK_NB)` 取锁（最多重试 1 秒），取到后立刻写 pid 文件，daemonize 后再以 daemon 的 pid 覆盖。锁的打开文件描述会被所有子进程继承，因此只要本实例还有任何进程活着，锁就一直被持有：
+**实例锁**：pid 文件旁有锁文件 `<pid 文件去掉 .pid>.lock`（默认 `runtime/<APP_NAME>.lock`；`.env` 设了 `PROCESS_PID_FILE=runtime/loong-swoole.pid` 时为 `runtime/loong-swoole.lock`；永不删除）。`start` 在任何 fork / daemonize **之前**以 `flock(LOCK_EX|LOCK_NB)` 取锁（最多重试 1 秒），取到后立刻写 pid 文件，daemonize 后再以 daemon 的 pid 覆盖。锁的打开文件描述会被所有子进程继承，因此只要本实例还有任何进程活着，锁就一直被持有：
 
 - 同时执行多个 `start`（实测 10 个并发）只有一个成功，其余报 `Already running (pid N)`（或 `Another start is in progress`），退出码 1。
 - 平滑停止期间（RPC 在排空请求）再 `start` 会被拒绝：`Already running (pid N)`。
@@ -279,7 +279,7 @@ Loongs status
 
 **pid / 锁文件在运行中被删除或替换（自愈）**：
 
-- 兜底识别 master：pid 文件缺失 / 内容不对、或锁文件被删除 / 替换时，`status` / `stop` / `reload` / `start` 通过 `/proc/*/fd` 找**打开着本实例锁路径**（当前文件，或已删除的 inode `<路径> (deleted)`）且进程名为 `loong-swoole: master` 的进程。锁路径由 pid 文件派生、每个实例唯一，不会认错其他实例。
+- 兜底识别 master：pid 文件缺失 / 内容不对、或锁文件被删除 / 替换时，`status` / `stop` / `reload` / `start` 通过 `/proc/*/fd` 找**打开着本实例锁路径**（当前文件，或已删除的 inode `<路径> (deleted)`）且进程名为 `loong-swoole[<APP_NAME>]: master` 的进程。锁路径由 pid 文件派生、每个实例唯一，标题又带 APP_NAME，不会认错其他实例或其他服务。
 - master 每 1 秒自检（`HEAL_INTERVAL`）：pid 文件缺失或不是自己的 pid → 重写；锁文件缺失或 inode 与自己持有的不同 → 重新创建并 `flock(LOCK_EX|LOCK_NB)`。两者都记 WARN。子进程继续持有旧（已删除）的 inode，`status` / `stop` / 孤儿检测照样能找到它们。若新锁已被别的进程持有，记一次 ERROR 并继续运行，对方释放后自动接管。
 - 自愈完成前 `status` 仍显示 running，并附 `note:`；`start`（包括只启动无端口进程的 `--only`）一律 `Already running (pid N)`，不会起第二个实例；`stop`、`reload` 正常。
 - `start` 端口预检失败时，只删除内容是自己 pid 的 pid 文件。
@@ -308,7 +308,7 @@ $ ./loongs start --only=http,rpc --no-ansi
 
 **端口预检**：取锁后、fork 之前逐个 bind 配置端口（**不**设 SO_REUSEPORT，因此即使对方用 SO_REUSEPORT 监听、而 RPC 本身使用 reuse_port 也能发现冲突），被占用时从 `/proc/net/tcp*` 找出占用者 pid 与命令行并拒绝启动（退出码 1，pid 文件被清除、锁被释放）。
 
-**master 意外死亡（kill -9、终端关闭）**：每个子进程在启动角色前 fork 一个看门狗（进程名 `loong-swoole: watchdog <tag>`），每 200ms 检查 master 是否仍在；master 消失后看门狗对子进程发 SIGTERM（平滑退出），15 秒后仍未退出则 SIGKILL 其整棵进程树。实测 kill -9 master 后 0.38s 内所有进程退出，端口释放，下次 `start` 正常。若仍有残留（看门狗也被杀、子进程卡死），`status` 显示 `orphaned`，`start` 拒绝并提示运行 `./loongs stop`，`stop` 负责清理（见 3.2）。
+**master 意外死亡（kill -9、终端关闭）**：每个子进程在启动角色前 fork 一个看门狗（进程名 `loong-swoole[<APP_NAME>]: watchdog <tag>`），每 200ms 检查 master 是否仍在；master 消失后看门狗对子进程发 SIGTERM（平滑退出），15 秒后仍未退出则 SIGKILL 其整棵进程树。实测 kill -9 master 后 0.38s 内所有进程退出，端口释放，下次 `start` 正常。若仍有残留（看门狗也被杀、子进程卡死），`status` 显示 `orphaned`，`start` 拒绝并提示运行 `./loongs stop`，`stop` 负责清理（见 3.2）。
 
 **强制退出**：平滑停止期间第二次收到 SIGINT / SIGTERM（前台再按一次 Ctrl+C，或 daemon 再 `kill -TERM`），master 立刻 SIGKILL 剩余子进程（含看门狗），删除 pid 文件、释放锁并记录：
 
@@ -334,6 +334,54 @@ $ ./loongs start --only=http,rpc --no-ansi
 | 看门狗：master 消失后等待子进程（`ORPHAN_GRACE`） | 15 秒 | SIGKILL 子进程树 |
 | 第二次 Ctrl+C / SIGTERM | 立即 | SIGKILL 全部，退出码 1 |
 | master 自检 pid / 锁文件（`HEAL_INTERVAL`） | 每 1 秒 | 重写 pid 文件 / 重建并重新加锁 |
+
+### 3.7 APP_NAME 与同机多服务
+
+`APP_NAME`（`.env`）是服务名，出现在所有进程标题和默认的 pid / 日志 / 锁文件名中，用来区分同一台机器上的多个服务。
+
+**规则**：只允许字母、数字、下划线：`^[A-Za-z0-9_]+$`。空值或未设置时为 `loongs`。`start` / `restart` / `stop` / `reload` / `status` 在任何 fork 之前校验，不合法则打印错误并退出码 1（不会创建 pid / 锁 / 日志文件）；`rpc:*`、`list`、`help` 不依赖它，不做校验。
+
+```text
+$ ./loongs start --no-ansi            # APP_NAME=my-app
+ [ERROR] Invalid APP_NAME "my-app": only letters, digits and underscores are
+         allowed ([A-Za-z0-9_]+), e.g. APP_NAME=my_app. Fix APP_NAME in .env
+         (empty or unset means "loongs").
+$ echo $?
+1
+```
+
+`中文`、`"my app"`（含空格）、`app.name` 同样被拒绝。
+
+**进程标题**：`loong-swoole[<APP_NAME>]: <role>`
+
+```text
+loong-swoole[alpha]: master
+loong-swoole[alpha]: http
+loong-swoole[alpha]: rpc
+loong-swoole[alpha]: custom-example
+loong-swoole[alpha]: user.stats          # app 进程
+loong-swoole[alpha]: watchdog http#0     # 看门狗
+```
+
+`ps -eo pid,args | grep '[l]oong-swoole\[alpha\]:'` 只列出 alpha 服务的进程。/proc 兜底找 master、孤儿检测、锁持有者、`status` / `stop` 都按本服务的前缀 `loong-swoole[<APP_NAME>]:` 匹配（外加锁路径），APP_NAME 不同的实例互不识别。端口被别的 loongs 服务占用时，端口预检会提示 `It belongs to another loongs service (other APP_NAME)`。
+
+**默认文件名**：`PROCESS_PID_FILE` / `PROCESS_LOG_FILE` 留空时为 `runtime/<APP_NAME>.pid` / `runtime/<APP_NAME>.log`，锁文件为 `runtime/<APP_NAME>.lock`。显式设置的值照常生效（例如本仓库 `.env` 里的 `PROCESS_PID_FILE=runtime/loong-swoole.pid`）。
+
+**同机多服务**：每个服务使用不同的 `APP_NAME` + 端口 + pid 文件（通常各自一个 `server/` 目录，默认 pid 文件已按 APP_NAME 区分）。实测 alpha（19501/19502）与 beta（19503，另一个 base 目录）同时运行：
+
+```text
+     453095  453032 loong-swoole[alpha]: master
+     453096  453095 loong-swoole[alpha]: http
+     453097  453095 loong-swoole[alpha]: rpc
+     453113  453032 loong-swoole[beta]: master
+     453114  453113 loong-swoole[beta]: http
+alpha$ ./loongs status      →  app: alpha … master: running  pid=453095 … pid file: …/server/runtime/alpha.pid
+beta $ ./loongs status      →  app: beta  … master: running  pid=453113 … pid file: /tmp/loongs-beta/runtime/beta.pid
+alpha$ ./loongs stop        →  [OK] Stopped (pid 453095, 1.21s).   beta 的 5 个进程全部仍在
+kill -9 <alpha master>      →  alpha 的 7 个进程 1.1s 内全部退出；beta 不受影响
+```
+
+**升级提示**：旧版本的进程标题是 `loong-swoole: …`（不带 APP_NAME）。升级前请先用旧代码 `./loongs stop` 停掉正在运行的实例；新代码仍能通过 pid 文件 + 锁找到旧 master，但基于标题的孤儿识别不认旧标题。
 
 ---
 
@@ -511,8 +559,9 @@ return [
 
 | 键 | 作用 |
 |---|---|
-| `PROCESS_PID_FILE` | master pid 文件（默认 `runtime/loong-swoole.pid`） |
-| `PROCESS_LOG_FILE` | daemon 模式下 master + 子进程 stdout/stderr 的去向（默认 `runtime/loong-swoole.log`，追加写，纯文本）；前台模式输出到终端 |
+| `APP_NAME` | 服务名：只允许字母、数字、下划线（`^[A-Za-z0-9_]+$`），空或未设 = `loongs`；出现在进程标题 `loong-swoole[<APP_NAME>]: …` 与默认 pid/log/锁文件名中；start/stop/restart/reload/status 启动前校验，非法则 exit 1 |
+| `PROCESS_PID_FILE` | master pid 文件（留空默认 `runtime/<APP_NAME>.pid`；锁文件 = 去掉 `.pid` 加 `.lock`） |
+| `PROCESS_LOG_FILE` | daemon 模式下 master + 子进程 stdout/stderr 的去向（留空默认 `runtime/<APP_NAME>.log`，追加写，纯文本）；前台模式输出到终端 |
 | `PROCESS_DAEMONIZE` | 是否后台运行（`start -d` 可覆盖） |
 | `HTTP_ENABLED` / `HTTP_HOST` / `HTTP_PORT` / `HTTP_WORKER_NUM` | HTTP 进程（默认端口 9501） |
 | `RPC_ENABLED` / `RPC_HOST` / `RPC_PORT` / `RPC_WORKER_NUM` | RPC 进程（默认端口 9502，loopback 缺省 endpoint 也用 `RPC_PORT`） |
@@ -547,7 +596,7 @@ composer install
 composer config -g repos.packagist composer https://mirrors.cloud.tencent.com/composer/
 ```
 
-**本地框架开发**：`composer.dev.json` 只在本地使用（不入库），以 path 仓库软链到 `../composer/framework`、`../composer/cache`。
+**本地框架开发**：`composer.dev.json` 只在本地使用（不入库），以 path 仓库软链到 `../composer/framework`、`../composer/cache`、`../composer/helper`（`loongs/helper`，尚未发布到 Packagist，所以只在 `composer.dev.json` 里引用）。
 
 ```bash
 cd server

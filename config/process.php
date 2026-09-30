@@ -8,9 +8,12 @@ use Loongs\Process\Websocket\EchoHandler;
 $cpuNum = function_exists('swoole_cpu_num') ? swoole_cpu_num() : 1;
 
 return [
-    'name' => (string) env('APP_NAME', 'loong-swoole'),
-    'pid_file' => (string) env('PROCESS_PID_FILE', 'runtime/loong-swoole.pid'),
-    'log_file' => (string) env('PROCESS_LOG_FILE', 'runtime/loong-swoole.log'),
+    // APP_NAME ([A-Za-z0-9_]+, default loongs) is validated by ProcessManager and shown in every
+    // process title: loong-swoole[<APP_NAME>]: master / http / rpc / watchdog http#0 …
+    'name' => (string) env('APP_NAME', 'loongs'),
+    // Empty → runtime/<APP_NAME>.pid / runtime/<APP_NAME>.log (lock: runtime/<APP_NAME>.lock).
+    'pid_file' => (string) env('PROCESS_PID_FILE', ''),
+    'log_file' => (string) env('PROCESS_LOG_FILE', ''),
     'daemonize' => filter_var(env('PROCESS_DAEMONIZE', false), FILTER_VALIDATE_BOOLEAN),
 
     'processes' => [

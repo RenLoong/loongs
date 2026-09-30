@@ -215,7 +215,7 @@ reload
 
 ### 3.5 `status` — 状态
 
-显示 master 状态、pid 文件，以及合并后（全局 + 各 app）的进程表。表列为 process / type / app / listen / count / pid / state，state 取值为 running、stopped、not running、orphaned、disabled。master 状态按实例锁判断（pid 文件 + 锁被持有 + 该 pid 是锁持有者）；陈旧 pid 文件只在确认无人持锁时才删除。master 已不在但仍有本实例进程时显示 `orphaned` 及 `→ run ./loongs stop to clean them up`。只读操作，不影响运行中的服务。
+显示 master 状态、pid 文件，以及合并后（全局 + 各 app）的进程表。表列为 process / type / app / listen / count / pid / state，state 取值为 running、stopped、not running、orphaned、disabled。master 状态按实例锁判断（pid 文件 + 锁被持有 + 该 pid 是锁持有者）；陈旧 pid 文件只在确认无人持锁时才删除。pid / 锁文件在运行中被删除时仍显示 running，并附 `note:`（master 1 秒内自愈，见 3.6）。master 已不在但仍有本实例进程时显示 `orphaned` 及 `→ run ./loongs stop to clean them up`。只读操作，不影响运行中的服务。
 
 ```
 status [options]
@@ -277,6 +277,35 @@ Loongs status
 - 平滑停止期间（RPC 在排空请求）再 `start` 会被拒绝：`Already running (pid N)`。
 - `status` / `stop` / `reload` / `start` 都以"锁被持有且 pid 文件里的 pid 是锁持有者"判断是否在运行，不再只看 `posix_kill(pid, 0)`；pid 被复用给无关进程时视为未运行，也不会给它发信号。
 
+**pid / 锁文件在运行中被删除或替换（自愈）**：
+
+- 兜底识别 master：pid 文件缺失 / 内容不对、或锁文件被删除 / 替换时，`status` / `stop` / `reload` / `start` 通过 `/proc/*/fd` 找**打开着本实例锁路径**（当前文件，或已删除的 inode `<路径> (deleted)`）且进程名为 `loong-swoole: master` 的进程。锁路径由 pid 文件派生、每个实例唯一，不会认错其他实例。
+- master 每 1 秒自检（`HEAL_INTERVAL`）：pid 文件缺失或不是自己的 pid → 重写；锁文件缺失或 inode 与自己持有的不同 → 重新创建并 `flock(LOCK_EX|LOCK_NB)`。两者都记 WARN。子进程继续持有旧（已删除）的 inode，`status` / `stop` / 孤儿检测照样能找到它们。若新锁已被别的进程持有，记一次 ERROR 并继续运行，对方释放后自动接管。
+- 自愈完成前 `status` 仍显示 running，并附 `note:`；`start`（包括只启动无端口进程的 `--only`）一律 `Already running (pid N)`，不会起第二个实例；`stop`、`reload` 正常。
+- `start` 端口预检失败时，只删除内容是自己 pid 的 pid 文件。
+
+实测（`-d`，同时删除 pid 与锁文件；只启动无端口进程的 `start --only=custom-example -d` 同样被拒绝）：
+
+```text
+$ rm runtime/loong-swoole-edge.pid runtime/loong-swoole-edge.lock
+$ ./loongs status --no-ansi
+  master: running  pid=445189
+  note: pid file missing or invalid — the master rewrites it within ~1s
+  note: lock file missing — the master re-creates it within ~1s
+$ ./loongs start --only=http,rpc --no-ansi
+ [ERROR] Already running (pid 445189). Use stop/reload/status.
+# runtime/loong-swoole-edge.log
+[2026-09-30 13:29:39] WARN  [master] pid file /www/wwwroot/loong-swoole/server/runtime/loong-swoole-edge.pid was missing: rewritten with pid 445189
+[2026-09-30 13:29:39] WARN  [master] lock file /www/wwwroot/loong-swoole/server/runtime/loong-swoole-edge.lock was missing: re-created and locked (children keep the unlinked inode; status/stop still find them)
+```
+
+锁文件被替换且被别的进程持有时：
+
+```text
+[2026-09-30 13:29:47] ERROR [master] lock file /www/wwwroot/loong-swoole/server/runtime/loong-swoole-edge.lock was replaced and is locked by another process (pid 446031 flock -n runtime/loong-swoole-edge.lock sleep 4, pid 446033 sleep 4); still running — check ./loongs status
+[2026-09-30 13:29:51] WARN  [master] lock file /www/wwwroot/loong-swoole/server/runtime/loong-swoole-edge.lock was replaced: re-created and locked (children keep the unlinked inode; status/stop still find them)
+```
+
 **端口预检**：取锁后、fork 之前逐个 bind 配置端口（**不**设 SO_REUSEPORT，因此即使对方用 SO_REUSEPORT 监听、而 RPC 本身使用 reuse_port 也能发现冲突），被占用时从 `/proc/net/tcp*` 找出占用者 pid 与命令行并拒绝启动（退出码 1，pid 文件被清除、锁被释放）。
 
 **master 意外死亡（kill -9、终端关闭）**：每个子进程在启动角色前 fork 一个看门狗（进程名 `loong-swoole: watchdog <tag>`），每 200ms 检查 master 是否仍在；master 消失后看门狗对子进程发 SIGTERM（平滑退出），15 秒后仍未退出则 SIGKILL 其整棵进程树。实测 kill -9 master 后 0.38s 内所有进程退出，端口释放，下次 `start` 正常。若仍有残留（看门狗也被杀、子进程卡死），`status` 显示 `orphaned`，`start` 拒绝并提示运行 `./loongs stop`，`stop` 负责清理（见 3.2）。
@@ -304,6 +333,7 @@ Loongs status
 | `./loongs stop` 清理孤儿 | 10 秒 | SIGKILL |
 | 看门狗：master 消失后等待子进程（`ORPHAN_GRACE`） | 15 秒 | SIGKILL 子进程树 |
 | 第二次 Ctrl+C / SIGTERM | 立即 | SIGKILL 全部，退出码 1 |
+| master 自检 pid / 锁文件（`HEAL_INTERVAL`） | 每 1 秒 | 重写 pid 文件 / 重建并重新加锁 |
 
 ---
 

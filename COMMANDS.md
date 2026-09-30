@@ -674,7 +674,7 @@ composer config -g repos.packagist composer https://mirrors.cloud.tencent.com/co
 
 ⚠ 腾讯镜像的 dist zip 按版本名缓存（`…/loongs/framework/dev-main/loongs-framework-dev-main.zip`），`dev-main` 可能给旧代码：2026-09-30 实测 lock 写 `bb2fdba`，zip 里却是旧提交 `4a2d8cd`（`composer --version`/`./loongs --version` 看不出来）。验证 `loongs/*` 新提交请直连 Packagist（dist = GitHub zipball，按 ref），或 `diff -rq vendor/loongs/framework/src ../composer/framework/src`。 实测直连 Packagist 的干净 clone：`vendor/loongs/framework/src` 与 `bb2fdba` 源码 0 个文件不同，`./loongs --version` = `Loongs dev-main@bb2fdba`，`Str::slug("Hello World 2026")` = `hello-world-2026`。
 
-**本地框架开发**：`composer.dev.json` 只在本地使用（不入库），以 path 仓库软链到 `../composer/framework`、`../composer/cache`、`../composer/helper`（`loongs/helper` 也已在 Packagist，`composer.json` 与 `composer.dev.json` 都 require 它）。
+**本地框架开发**：`composer.dev.json` 只在本地使用（不入库），以 path 仓库软链到 `../composer/framework`、`../composer/cache`、`../composer/helper`（`loongs/helper` 也已在 Packagist，`composer.json` 与 `composer.dev.json` 都 require 它），以及 `../composer/orm`（`loongs/orm`，**尚未上 Packagist**，因此只写在 `composer.dev.json`，不进 `composer.json`）。
 
 ```bash
 cd server

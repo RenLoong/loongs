@@ -657,13 +657,22 @@ return [
 | `RPC_IOURING` | io_uring 模式 `auto` / `on` / `off` |
 | `RPC_IOURING_ENTRIES` / `RPC_IOURING_WORKERS` / `RPC_IOURING_FLAG` | io_uring 参数 |
 
+**数据库连接池**
+
+| 键 | 作用 |
+|---|---|
+| `DB_POOL_SIZE` / `DB_POOL_WAIT_TIMEOUT` | 框架 `PDOPool`（命名连接，每 worker）大小；借不到连接时等待秒数（默认 3，超时抛 `Loongs\Database\PoolExhaustedException`；-1 = 永久等待） |
+| `ORM_POOL_SIZE` / `ORM_POOL_MAX_TENANTS` | loongs/orm 租户池：每个租户配置最多连接数（默认 8）/ 最多保留的租户桶（默认 64，LRU 淘汰） |
+| `ORM_POOL_IDLE_SECONDS` / `ORM_POOL_TTL` | 空闲连接关闭时间（默认 60）/ 连接最长寿命（默认 600，0 = 不限） |
+| `ORM_POOL_WAIT_TIMEOUT` / `ORM_POOL_VALIDATE` | 租户满时协程等待秒数（默认 3，超时 `PoolExhaustedException`）/ 取出时校验 `SELECT DATABASE()`（默认 true） |
+
 其它键（`APP_*`、`DB_*`、`REDIS_*`、`CACHE_*`）见 `.env.example`。`.env` 在 master 启动时加载，修改后需要 `restart` 才能确保生效；只有 `rpc.services` 支持不重启热加载（`rpc:*` 命令或直接编辑 `config/rpc.php`）。
 
 ---
 
 ## 8. Composer 命令
 
-**部署 / 使用者**：依赖来自 Packagist（`loongs/framework`、`loongs/cache`、`loongs/helper`、`symfony/console` 等，`loongs/*` 约束 `dev-main`）。
+**部署 / 使用者**：依赖来自 Packagist（`loongs/framework`、`loongs/cache`、`loongs/helper`、`loongs/orm`、`symfony/console` 等，`loongs/*` 约束 `dev-main`）。
 
 ```bash
 cd server
@@ -674,7 +683,7 @@ composer config -g repos.packagist composer https://mirrors.cloud.tencent.com/co
 
 ⚠ 腾讯镜像的 dist zip 按版本名缓存（`…/loongs/framework/dev-main/loongs-framework-dev-main.zip`），`dev-main` 可能给旧代码：2026-09-30 实测 lock 写 `bb2fdba`，zip 里却是旧提交 `4a2d8cd`（`composer --version`/`./loongs --version` 看不出来）。验证 `loongs/*` 新提交请直连 Packagist（dist = GitHub zipball，按 ref），或 `diff -rq vendor/loongs/framework/src ../composer/framework/src`。 实测直连 Packagist 的干净 clone：`vendor/loongs/framework/src` 与 `bb2fdba` 源码 0 个文件不同，`./loongs --version` = `Loongs dev-main@bb2fdba`，`Str::slug("Hello World 2026")` = `hello-world-2026`。
 
-**本地框架开发**：`composer.dev.json` 只在本地使用（不入库），以 path 仓库软链到 `../composer/framework`、`../composer/cache`、`../composer/helper`（`loongs/helper` 也已在 Packagist，`composer.json` 与 `composer.dev.json` 都 require 它），以及 `../composer/orm`（`loongs/orm`，**尚未上 Packagist**，因此只写在 `composer.dev.json`，不进 `composer.json`）。
+**本地框架开发**：`composer.dev.json` 只在本地使用（不入库），以 path 仓库软链到 `../composer/framework`、`../composer/cache`、`../composer/helper`、`../composer/orm`（`loongs/helper`、`loongs/orm` 也都在 Packagist，`composer.json` 与 `composer.dev.json` 都 require 它们）。
 
 ```bash
 cd server

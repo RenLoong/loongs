@@ -7,7 +7,8 @@
         "php": "^8.4",
         "loongs/cache": "dev-main",
         "loongs/framework": "dev-main",
-        "loongs/helper": "dev-main"
+        "loongs/helper": "dev-main",
+        "loongs/orm": "dev-main"
     },
     "autoload": {
         "psr-4": {

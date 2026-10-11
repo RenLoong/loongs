@@ -14,6 +14,7 @@ return [
             'password' => env('DB_PASSWORD', ''),
             'charset' => env('DB_CHARSET', 'utf8mb4'),
             'unix_socket' => env('DB_SOCKET', ''),
+            'prefix' => env('DB_PREFIX', 'lgs_'),
             'options' => [],
             'pool' => [
                 'size' => (int) env('DB_POOL_SIZE', 16),

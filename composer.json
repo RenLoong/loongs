@@ -4,12 +4,9 @@
     "type": "project",
     "license": "MIT",
     "require": {
-        "php": "^8.4",
-        "loongs/cache": "dev-main",
         "loongs/framework": "dev-main",
         "loongs/helper": "dev-main",
-        "loongs/oauth": "dev-main",
-        "loongs/orm": "dev-main"
+        "php": "^8.4"
     },
     "autoload": {
         "psr-4": {
@@ -20,5 +17,10 @@
     "prefer-stable": true,
     "config": {
         "sort-packages": true
+    },
+    "scripts": {
+        "post-autoload-dump": [
+            "@php bin/publish-loongs-configs.php"
+        ]
     }
 }

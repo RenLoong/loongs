@@ -16,3 +16,4 @@ composer.lock
 composer.dev.lock
 
 composer.dev.json
+.cursor/

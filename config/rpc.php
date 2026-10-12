@@ -9,6 +9,12 @@ declare(strict_types=1);
  * Instance weight drives WeightedInstancePicker (equal weights → stable order;
  * unequal → weighted shuffle). Backoff uses coroutine-friendly Sleeper.
  *
+ * App auto-scan (Loongs\App\AppRpcServices):
+ *   - apps/<Name>/config/rpc.php → its services map (or whole return as services)
+ *   - else apps/<Name>/rpc.php (handlers) → auto service key = strtolower(<Name>),
+ *     default { transport: local, timeout_ms: 3000 }
+ *   Merged under services with array_replace(app, root) — entries below win on conflict.
+ *   Hot-reload fingerprints app rpc files too (no need to touch this file when adding an app).
  * Hot switch (no restart): `services` is re-read by every worker when this file or the
  * runtime override file changes (see `hot_reload`). Change targets with:
  *   ./loongs rpc:show [service]
@@ -55,16 +61,7 @@ return [
         'failover' => true,
     ],
     'services' => [
-        'demo' => [
-            'transport' => 'local',
-            'timeout_ms' => 3000,
-        ],
-        // User RPC service app (server/apps/User). Default Local (same process).
-        // For Loopback/Remote point endpoint at the RPC process port (default 9502).
-        'user' => [
-            'transport' => 'local',
-            'timeout_ms' => 3000,
-        ],
+        // Apps with apps/<Name>/rpc.php auto-register as strtolower(<Name>) local.
         // Example loopback (same machine, RPC process on RPC_PORT):
         // 'user' => [
         //     'transport' => 'loopback',

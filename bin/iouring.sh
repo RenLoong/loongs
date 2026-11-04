@@ -5,6 +5,7 @@
 #   sudo ./iouring.sh
 #
 # 会备份现有 swoole.so，从 PECL 下载源码编译并安装，最后打印 uring 相关信息。
+# 支持 Debian/Ubuntu (apt) 与 RHEL/CentOS/Rocky (dnf/yum)。
 
 set -euo pipefail
 
@@ -23,10 +24,25 @@ if [[ ! -x "$PHP_CONFIG" ]]; then
 fi
 
 echo "==> 安装编译依赖"
-apt-get install -y \
-  build-essential autoconf \
-  libssl-dev libcurl4-openssl-dev libc-ares-dev \
-  liburing-dev
+if command -v apt-get >/dev/null 2>&1; then
+  apt-get install -y \
+    build-essential autoconf \
+    libssl-dev libcurl4-openssl-dev libc-ares-dev \
+    liburing-dev
+elif command -v dnf >/dev/null 2>&1; then
+  dnf install -y \
+    gcc gcc-c++ make autoconf \
+    openssl-devel libcurl-devel c-ares-devel \
+    liburing liburing-devel
+elif command -v yum >/dev/null 2>&1; then
+  yum install -y \
+    gcc gcc-c++ make autoconf \
+    openssl-devel libcurl-devel c-ares-devel \
+    liburing liburing-devel
+else
+  echo "找不到 apt-get / dnf / yum，请先手动安装编译依赖与 liburing-devel。" >&2
+  exit 1
+fi
 
 EXT_DIR="$("$PHP_CONFIG" --extension-dir)"
 SWOOLE_SO="$EXT_DIR/swoole.so"
